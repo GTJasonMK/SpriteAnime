@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SpriteAnimte</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- 标签栏 -->
+    <nav class="tab-bar">
+      <button class="tab-button active" data-tab="generator">图片生成</button>
+      <button class="tab-button" data-tab="sprite">序列帧预览</button>
+    </nav>
+
+    <!-- ==================== 图片生成页面（工作台布局） ==================== -->
+    <main id="page-generator" class="page active">
+      <!-- 顶部工具栏 -->
+      <div class="workbench-toolbar">
+        <button id="btn-generate" class="btn-primary btn-generate-lg" type="button">开始生成</button>
+        <div class="progress-container" id="progress-container" style="display:none">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span class="progress-text" id="progress-text">准备中...</span>
+        </div>
+        <span class="toolbar-status" id="toolbar-status">就绪</span>
+        <button id="btn-settings" class="btn-settings" title="设置" type="button">⚙</button>
+      </div>
+
+      <!-- 主工作区 -->
+      <div class="workbench-layout">
+        <!-- 左侧边栏：提示词 + 参数 -->
+        <aside class="workbench-sidebar">
+          <div class="sidebar-params" id="generation-params">
+            <div class="form-group">
+              <div class="prompt-label-row">
+                <label for="prompt-input">提示词</label>
+                <button id="btn-optimize-prompt" class="btn-sm" type="button">优化提示词</button>
+              </div>
+              <textarea id="prompt-input" rows="5" placeholder="描述角色、动作和风格...（Ctrl+↑/↓浏览历史）"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="neg-prompt-input">负面提示词</label>
+              <input type="text" id="neg-prompt-input" placeholder="需要避免的内容..." />
+            </div>
+            <div class="form-group">
+              <label for="style-select">风格</label>
+              <select id="style-select"></select>
+            </div>
+            <div class="form-group">
+              <label for="ratio-select">宽高比</label>
+              <select id="ratio-select"></select>
+            </div>
+            <div class="form-group">
+              <label for="resolution-select">分辨率</label>
+              <select id="resolution-select"></select>
+            </div>
+            <div class="form-group">
+              <label for="count-select">数量</label>
+              <select id="count-select">
+                <option value="1">1张</option>
+                <option value="2">2张</option>
+                <option value="3">3张</option>
+                <option value="4">4张</option>
+              </select>
+            </div>
+          </div>
+          <div class="sidebar-params matting-params" id="matting-params" hidden>
+            <div class="panel-heading">
+              <span>抠图</span>
+              <button id="btn-exit-matting" class="btn-sm" type="button">退出</button>
+            </div>
+            <div class="form-group">
+              <label for="matting-tolerance-input">背景容差</label>
+              <input type="range" id="matting-tolerance-input" min="1" max="120" value="36" />
+              <span class="range-value" id="matting-tolerance-label">36</span>
+            </div>
+            <div class="form-group">
+              <label for="matting-feather-input">边缘柔化</label>
+              <input type="range" id="matting-feather-input" min="0" max="3" value="1" />
+              <span class="range-value" id="matting-feather-label">1px</span>
+            </div>
+            <div class="form-group">
+              <label for="matting-color-key-select">抠图范围</label>
+              <select id="matting-color-key-select">
+                <option value="auto">自动</option>
+                <option value="edge">仅边缘</option>
+                <option value="global">全图同色</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="matting-click-tolerance-input">点击容差</label>
+              <input type="range" id="matting-click-tolerance-input" min="1" max="120" value="28" />
+              <span class="range-value" id="matting-click-tolerance-label">28</span>
+            </div>
+            <div class="form-group">
+              <label for="matting-click-radius-input">点击半径</label>
+              <input type="range" id="matting-click-radius-input" min="0" max="8" value="1" />
+              <span class="range-value" id="matting-click-radius-label">1px</span>
+            </div>
+            <div class="matting-actions matting-history-actions">
+              <button id="btn-undo-matting" class="btn-secondary" type="button" disabled>撤销</button>
+              <button id="btn-redo-matting" class="btn-secondary" type="button" disabled>恢复</button>
+            </div>
+            <div class="matting-actions matting-main-actions">
+              <button id="btn-run-matting" class="btn-primary" type="button">自动抠图</button>
+              <button id="btn-save-matting" class="btn-secondary" type="button" disabled>保存修改</button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="workbench-main">
+          <div class="workspace-empty" id="workspace-empty">
+            <span class="empty-icon">🖼</span>
+            <h3 class="empty-title">准备生成</h3>
+            <p class="empty-hint">输入提示词，然后点击上方「开始生成」按钮</p>
+            <button id="btn-add-record-empty" class="btn-secondary" type="button">添加本地图片</button>
+          </div>
+          <div class="workspace-results" id="result-card" style="display:none">
+            <div class="result-workbench">
+              <div class="selected-preview" id="selected-preview">
+                <img id="selected-image" alt="当前选中图片" />
+                <canvas id="matting-canvas"></canvas>
+                <div class="selected-meta" id="selected-meta">未选择图片</div>
+              </div>
+              <div class="gallery-panel">
+                <div class="gallery-header">
+                  <div class="gallery-title">
+                    <span>生成记录</span>
+                    <span id="gallery-count">0 张</span>
+                  </div>
+                  <div class="gallery-tools">
+                    <button id="btn-add-record" class="btn-icon-sm" type="button" title="添加本地图片">+</button>
+                    <button id="btn-delete-record" class="btn-icon-sm" type="button" title="移除选中记录" disabled>-</button>
+                    <button id="btn-clear-records" class="btn-sm btn-danger-soft" type="button" title="清空工作台记录" disabled>清空</button>
+                  </div>
+                </div>
+                <div class="image-grid" id="result-grid"></div>
+              </div>
+            </div>
+            <div class="result-actions" id="result-actions" style="display:none">
+              <button id="btn-view-image" class="btn-secondary" disabled>查看图片</button>
+              <button id="btn-open-dir" class="btn-secondary" disabled>打开目录</button>
+              <button id="btn-transparent-background" class="btn-secondary" disabled>抠图模式</button>
+              <button id="btn-to-sprite" class="btn-secondary" disabled>制作序列帧</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 设置弹窗 -->
+      <div class="modal-overlay" id="settings-modal" style="display:none">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>设置</h2>
+            <button id="btn-close-modal" class="btn-close-modal">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">API 与模型</h3>
+              <div class="form-group">
+                <label for="api-key">API Key</label>
+                <div class="input-row">
+                  <input type="password" id="api-key" placeholder="输入API密钥" autocomplete="off" />
+                  <button id="btn-toggle-key" class="btn-icon" title="显示/隐藏">👁</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="api-base">API 地址</label>
+                <input type="text" id="api-base" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="model-input">模型</label>
+                <input type="text" id="model-input" list="model-list" placeholder="输入或选择模型" autocomplete="off" />
+                <datalist id="model-list"></datalist>
+              </div>
+              <div class="form-group">
+                <label for="proxy-url">代理地址</label>
+                <input type="text" id="proxy-url" placeholder="留空则使用系统代理" autocomplete="off" />
+              </div>
+            </div>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">提示词优化 LLM</h3>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-key">优化 API Key</label>
+                <input type="password" id="prompt-optimizer-api-key" placeholder="留空则复用生图 API Key" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-base">优化 API 地址</label>
+                <input type="text" id="prompt-optimizer-api-base" placeholder="https://api.deepseek.com" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-model-input">优化模型</label>
+                <input type="text" id="prompt-optimizer-model-input" list="model-list" placeholder="deepseek-v4-flash" autocomplete="off" />
+              </div>
+            </div>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">输出</h3>
+              <div class="form-group">
+                <label for="save-dir-input">保存目录</label>
+                <div class="input-row">
+                  <input type="text" id="save-dir-input" placeholder="选择保存目录" readonly />
+                  <button id="btn-browse-dir" class="btn-sm">📁</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="btn-save-config" class="btn-primary">💾 保存配置</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ==================== 序列帧预览页面 ==================== -->
+    <main id="page-sprite" class="page">
+      <div class="sprite-layout">
+        <aside class="sprite-inspector">
+          <section class="sprite-panel">
+            <div class="panel-heading">
+              <span>源图</span>
+            </div>
+            <div class="form-group">
+              <label for="sprite-image-select">图片源</label>
+              <div class="source-row">
+                <select id="sprite-image-select">
+                  <option value="">-- 请先选择或生成图片 --</option>
+                </select>
+                <button id="btn-pick-image" class="btn-secondary" type="button">选择图片</button>
+              </div>
+            </div>
+            <div class="split-actions">
+              <button id="btn-preview-grid" class="btn-secondary" type="button">预览网格</button>
+              <button id="btn-load-split" class="btn-primary" type="button">拆分帧</button>
+            </div>
+          </section>
+
+          <section class="sprite-panel">
+            <div class="panel-heading">
+              <span>网格</span>
+              <button id="btn-reset-grid-lines" class="btn-sm" type="button" title="将网格线恢复为均匀分配">均分</button>
+            </div>
+            <div class="grid-size-row">
+              <div class="form-group">
+                <label for="rows-input">行数</label>
+                <input type="number" id="rows-input" value="3" min="1" max="20" class="input-sm" />
+              </div>
+              <div class="form-group">
+                <label for="cols-input">列数</label>
+                <input type="number" id="cols-input" value="4" min="1" max="20" class="input-sm" />
+              </div>
+            </div>
+            <div class="grid-preset-row">
+              <button class="btn-sm grid-preset" type="button" data-rows="3" data-cols="4">3x4</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="4" data-cols="6">4x6</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="2" data-cols="4">2x4</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="4" data-cols="4">4x4</button>
+            </div>
+          </section>
+
+          <section class="sprite-panel">
+            <div class="panel-heading">
+              <span>切分区域</span>
+              <button id="btn-region-full" class="btn-sm" type="button">整图</button>
+            </div>
+            <div class="region-grid">
+              <label class="region-field">
+                <span>X</span>
+                <input type="number" id="region-x-input" value="0" min="0" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>Y</span>
+                <input type="number" id="region-y-input" value="0" min="0" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>W</span>
+                <input type="number" id="region-w-input" value="0" min="1" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>H</span>
+                <input type="number" id="region-h-input" value="0" min="1" class="input-sm" />
+              </label>
+            </div>
+          </section>
+
+          <section class="sprite-panel">
+            <div class="panel-heading">
+              <div class="boundary-heading-options">
+                <label class="auto-trim-toggle">
+                  <input type="checkbox" id="auto-trim-checkbox" />
+                  自动边界
+                </label>
+                <label class="auto-trim-toggle auto-expand-toggle" id="auto-expand-toggle">
+                  <input type="checkbox" id="auto-expand-checkbox" />
+                  允许扩展
+                </label>
+              </div>
+              <button id="btn-detect-bounds" class="btn-sm" type="button">检测</button>
+            </div>
+            <div class="boundary-grid">
+              <label class="region-field sprite-auto-advanced">
+                <span>背景</span>
+                <select id="auto-bg-mode-select" class="input-compact">
+                  <option value="auto">自动</option>
+                  <option value="white">纯白</option>
+                </select>
+              </label>
+              <label class="region-field">
+                <span>裁切</span>
+                <select id="auto-trim-mode-select" class="input-compact">
+                  <option value="tight">逐帧</option>
+                  <option value="fixed">统一</option>
+                </select>
+              </label>
+              <label class="region-field sprite-auto-advanced">
+                <span>阈值</span>
+                <input type="number" id="auto-trim-threshold-input" value="32" min="1" max="255" class="input-sm" />
+              </label>
+            </div>
+            <div class="boundary-actions">
+              <button id="btn-boundary-add" class="btn-sm" type="button">新增</button>
+              <button id="btn-boundary-edit" class="btn-sm" type="button" disabled>编辑</button>
+              <button id="btn-boundary-delete" class="btn-sm" type="button" disabled>删除</button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="sprite-main">
+          <div class="preview-meta-bar">
+            <span class="frame-info" id="frame-size-info">尺寸: -</span>
+          </div>
+          <div class="preview-area">
+            <canvas id="preview-canvas"></canvas>
+            <div class="preview-placeholder" id="preview-placeholder">动画预览区域</div>
+          </div>
+          <div class="playback-controls">
+            <button id="btn-prev-frame" class="btn-sm">上一帧</button>
+            <button id="btn-play-pause" class="btn-primary">播放</button>
+            <button id="btn-next-frame" class="btn-sm">下一帧</button>
+            <div class="control-group">
+              <label>FPS</label>
+              <input type="range" id="fps-slider" min="1" max="60" value="24" />
+              <span id="fps-label">24</span>
+            </div>
+            <div class="control-group">
+              <label>缩放</label>
+              <input type="range" id="scale-slider" min="0.1" max="5" value="1" step="0.1" />
+              <span id="scale-label">1.0x</span>
+            </div>
+            <span class="frame-info" id="frame-info">帧: 0/0</span>
+          </div>
+        </section>
+
+        <aside class="sprite-sidebar">
+          <div class="frames-header">
+            <span>帧列表</span>
+            <button id="btn-export" class="btn-primary" disabled>导出</button>
+          </div>
+          <div class="sidebar-toolbar">
+            <button id="btn-select-all" class="btn-sm">全选</button>
+            <button id="btn-invert" class="btn-sm">反选</button>
+            <button id="btn-clear-sel" class="btn-sm">清空</button>
+          </div>
+          <div class="boundary-sidebar-panel" id="boundary-editor-panel">
+            <div class="boundary-sidebar-header">
+              <span id="boundary-editor-title">边界框</span>
+              <button id="btn-boundary-editor-close" class="btn-icon-sm" type="button" title="取消选择">×</button>
+            </div>
+            <div class="boundary-editor-grid">
+              <label class="region-field">
+                <span>左</span>
+                <input type="number" id="boundary-left-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>上</span>
+                <input type="number" id="boundary-top-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>右</span>
+                <input type="number" id="boundary-right-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>下</span>
+                <input type="number" id="boundary-bottom-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>定位针 X</span>
+                <input type="number" id="boundary-anchor-x-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>&nbsp;</span>
+                <button id="btn-boundary-anchor-center" class="btn-sm" type="button" disabled>居中</button>
+              </label>
+            </div>
+            <div class="boundary-editor-footer">
+              <button id="btn-boundary-editor-delete" class="btn-sm btn-danger-soft" type="button" disabled>删除</button>
+              <button id="btn-boundary-editor-cancel" class="btn-sm" type="button" disabled>取消</button>
+              <button id="btn-boundary-editor-apply" class="btn-primary" type="button" disabled>完成</button>
+            </div>
+          </div>
+          <div class="thumbnail-list" id="thumbnail-list">
+            <div class="placeholder-text">先预览网格，再拆分帧</div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "api_key": "",
+  "api_base": "https://your-relay.example/v1",
+  "proxy_url": "",
+  "last_model": "gpt-5.3-codex",
+  "last_ratio": "1:1",
+  "last_resolution": "原始",
+  "last_style": "anime",
+  "last_count": 1,
+  "prompt_optimizer_api_key": "",
+  "prompt_optimizer_api_base": "https://api.deepseek.com",
+  "prompt_optimizer_model": "deepseek-v4-flash",
+  "save_dir": "",
+  "prompt_history": []
+}

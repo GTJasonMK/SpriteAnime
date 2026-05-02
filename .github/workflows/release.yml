@@ -1,0 +1,381 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (tag/branch/sha). Leave empty to use the workflow ref."
+        required: false
+        default: ""
+      release_tag:
+        description: "Release tag, e.g. v0.1.0. Leave empty to use src-tauri/tauri.conf.json version."
+        required: false
+        default: ""
+      draft:
+        description: "Create the GitHub release as a draft"
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight Checks
+    runs-on: ubuntu-22.04
+    outputs:
+      build_sha: ${{ steps.resolve-build.outputs.build_sha }}
+      release_tag: ${{ steps.resolve-build.outputs.release_tag }}
+      release_version: ${{ steps.resolve-build.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve build ref and release version
+        id: resolve-build
+        shell: bash
+        env:
+          INPUT_REF: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || '' }}
+          INPUT_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || '' }}
+        run: |
+          set -euo pipefail
+
+          build_ref=""
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ -n "${INPUT_REF}" ]]; then
+              build_ref="${INPUT_REF}"
+            fi
+          fi
+
+          if [[ -n "${build_ref}" ]]; then
+            echo "[INFO] Checking out build ref: ${build_ref}"
+            if ! git checkout --force "${build_ref}"; then
+              if [[ "${build_ref}" != v* ]]; then
+                echo "[WARN] Failed to checkout '${build_ref}', retrying as 'v${build_ref}'."
+                git checkout --force "v${build_ref}"
+                build_ref="v${build_ref}"
+              else
+                echo "[ERROR] Failed to checkout build ref: ${build_ref}" >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          config_version="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          config = json.loads(Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+          print(config["version"])
+          PY
+          )"
+
+          release_tag=""
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            release_tag="${INPUT_RELEASE_TAG}"
+            if [[ -z "${release_tag}" ]]; then
+              release_tag="v${config_version}"
+            fi
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+
+          normalized_tag="${release_tag}"
+          if [[ -n "${normalized_tag}" && "${normalized_tag}" != v* ]]; then
+            normalized_tag="v${normalized_tag}"
+          fi
+          release_version="${normalized_tag#v}"
+
+          build_sha="$(git rev-parse HEAD)"
+          echo "[INFO] Preflight build SHA: ${build_sha}"
+          echo "[INFO] Release tag: ${normalized_tag}"
+          echo "[INFO] Release version: ${release_version}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${INPUT_REF}" ]]; then
+            existing_tag_commit="$(git rev-parse --verify "${normalized_tag}^{commit}" 2>/dev/null || true)"
+            if [[ -n "${existing_tag_commit}" && "${existing_tag_commit}" != "${build_sha}" ]]; then
+              echo "[ERROR] workflow_dispatch 输入不一致：ref 与 release_tag 指向不同提交。" >&2
+              echo "[HINT] ref(${INPUT_REF}) -> ${build_sha}" >&2
+              echo "[HINT] release_tag(${normalized_tag}) -> ${existing_tag_commit}" >&2
+              exit 1
+            fi
+          fi
+
+          echo "build_sha=${build_sha}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${normalized_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  bundle:
+    name: Bundle ${{ matrix.label }}
+    needs: preflight
+    runs-on: ${{ matrix.platform }}
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.release_version }}
+      BUILD_ARGS: ${{ matrix.args }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            artifact: linux-x64
+            platform: ubuntu-22.04
+            args: ""
+            rustTarget: ""
+          - label: Windows x64
+            artifact: windows-x64
+            platform: windows-latest
+            args: ""
+            rustTarget: ""
+          - label: macOS Apple Silicon
+            artifact: macos-aarch64
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rustTarget: aarch64-apple-darwin
+          - label: macOS Intel
+            artifact: macos-x86_64
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            rustTarget: x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight.outputs.build_sha }}
+
+      - name: Prepare release version override
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "{ \"version\": \"${RELEASE_VERSION}\" }" > src-tauri/tauri.release.conf.json
+          echo "[INFO] Release tag: ${RELEASE_TAG}"
+          echo "[INFO] Release version: ${RELEASE_VERSION}"
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libfuse2 \
+            file \
+            rpm \
+            patchelf
+
+      - name: Install Windows bundlers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y
+          choco install wixtoolset -y
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        if: matrix.rustTarget != ''
+        run: rustup target add ${{ matrix.rustTarget }}
+
+      - name: Cache Rust build output
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build bundles
+        shell: bash
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          set -euo pipefail
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            # linuxdeploy strip may break on modern ELF sections in AppImage pipelines.
+            export NO_STRIP=1
+          fi
+
+          args=(-c src-tauri/tauri.release.conf.json)
+          if [[ -n "${BUILD_ARGS}" ]]; then
+            # BUILD_ARGS comes from this workflow matrix, not user input.
+            read -r -a extra_args <<< "${BUILD_ARGS}"
+            args+=("${extra_args[@]}")
+          fi
+
+          npx tauri build "${args[@]}"
+
+      - name: Write bundle metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch_raw="$(uname -m || true)"
+          arch="${arch_raw}"
+          case "${arch_raw}" in
+            x86_64|amd64) arch="x86_64" ;;
+            arm64|aarch64) arch="aarch64" ;;
+          esac
+
+          mkdir -p src-tauri/target/release/bundle
+          cat > src-tauri/target/release/bundle/ci-meta.json <<EOF
+          {
+            "label": "${{ matrix.label }}",
+            "artifact": "${{ matrix.artifact }}",
+            "os": "${{ runner.os }}",
+            "arch": "${arch}",
+            "release_tag": "${RELEASE_TAG}",
+            "release_version": "${RELEASE_VERSION}"
+          }
+          EOF
+          cat src-tauri/target/release/bundle/ci-meta.json
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.artifact }}
+          path: src-tauri/target/release/bundle/**
+          if-no-files-found: error
+
+  release:
+    name: Release GitHub Assets
+    needs: [preflight, bundle]
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.preflight.outputs.build_sha }}
+
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bundles-*
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          for dir in artifacts/bundles-*; do
+            source_name="$(basename "$dir")"
+            echo "[INFO] Collecting files from ${source_name}"
+            while IFS= read -r -d '' file; do
+              base="$(basename "$file")"
+              cp "$file" "release-assets/${source_name}__${base}"
+            done < <(
+              find "$dir" -type f \
+                \( \
+                  -name "*.AppImage" -o \
+                  -name "*.deb" -o \
+                  -name "*.rpm" -o \
+                  -name "*.msi" -o \
+                  -name "*.exe" -o \
+                  -name "*.dmg" -o \
+                  -name "*.pkg" -o \
+                  -name "*.zip" -o \
+                  -name "*.tar.gz" \
+                \) -print0
+            )
+          done
+
+          if [ -z "$(ls -A release-assets)" ]; then
+            echo "[ERROR] No release assets were found under artifacts/." >&2
+            exit 1
+          fi
+
+          (cd release-assets && sha256sum * > checksums.sha256)
+          echo "[INFO] Release assets:"
+          ls -la release-assets
+
+      - name: Delete existing same-name assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            asset="$(basename "$file")"
+            gh release delete-asset "${RELEASE_TAG}" "${asset}" -y || true
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ needs.preflight.outputs.build_sha }}
+          name: SpriteAnimte ${{ env.RELEASE_TAG }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: release-assets/*
+          body: |
+            自动构建的 SpriteAnimte 桌面安装包。
+
+            下载下方 assets 中对应平台的安装包：
+            - Linux: AppImage / deb / rpm
+            - Windows: msi / nsis
+            - macOS: dmg
