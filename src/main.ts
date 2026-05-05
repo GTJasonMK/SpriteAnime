@@ -1,10 +1,12 @@
 import { GeneratorPage } from "./pages/generator";
 import { SpritePage } from "./pages/sprite";
+import { VideoSpritePage } from "./pages/video-sprite";
 
 document.addEventListener("DOMContentLoaded", async () => {
   console.log("[main] SpriteAnimte 启动中...");
 
   const generator = new GeneratorPage();
+  const videoSprite = new VideoSpritePage();
   const sprite = new SpritePage();
 
   // 标签页切换
@@ -32,6 +34,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 初始化两个页面
   try {
     await generator.init();
+    videoSprite.init(generator);
     await sprite.init(generator);
     console.log("[main] SpriteAnimte 启动完成");
   } catch (err) {

@@ -8,11 +8,23 @@ use std::time::Duration;
 pub const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(360);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const API_CHECK_TIMEOUT: Duration = Duration::from_secs(25);
 const USER_AGENT: &str = "SpriteAnimte/0.1";
 
 struct ApiHttpClient {
     label: String,
     client: Client,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiCheckResult {
+    pub ok: bool,
+    pub status: String,
+    pub message: String,
+    pub endpoint: String,
+    pub model: String,
+    pub model_found: Option<bool>,
 }
 
 #[derive(Default)]
@@ -64,6 +76,7 @@ fn build_proxy_client(proxy_url: &str) -> Result<Client, String> {
     Client::builder()
         .proxy(reqwest::Proxy::all(proxy_url).map_err(|e| format!("代理配置失败: {}", e))?)
         .user_agent(USER_AGENT)
+        .http1_only()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(GENERATION_TIMEOUT)
         .tcp_keepalive(Duration::from_secs(30))
@@ -75,6 +88,7 @@ fn build_direct_client() -> Result<Client, String> {
     Client::builder()
         .no_proxy()
         .user_agent(USER_AGENT)
+        .http1_only()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(GENERATION_TIMEOUT)
         .tcp_keepalive(Duration::from_secs(30))
@@ -105,6 +119,18 @@ fn describe_send_error(e: &reqwest::Error) -> String {
     } else {
         format!("请求异常: {detail}")
     }
+}
+
+fn is_retryable_send_error(e: &reqwest::Error) -> bool {
+    if e.is_timeout() || e.is_connect() {
+        return true;
+    }
+    let detail = describe_reqwest_error(e).to_ascii_lowercase();
+    detail.contains("connection closed before message completed")
+        || detail.contains("client error (sendrequest)")
+        || detail.contains("connection reset")
+        || detail.contains("broken pipe")
+        || detail.contains("unexpected eof")
 }
 
 fn describe_reqwest_error(e: &reqwest::Error) -> String {
@@ -156,13 +182,111 @@ fn parse_http_error(status: u16, body: &str) -> String {
     }
 }
 
+fn response_preview(body: &str) -> String {
+    let body = body.trim();
+    if body.chars().count() <= 300 {
+        body.to_string()
+    } else {
+        let preview: String = body.chars().take(300).collect();
+        format!("{preview}...（已截断）")
+    }
+}
+
 /// ============================================================
 /// POST /responses — 固定使用 image_generation 工具的流式请求
 /// ============================================================
+pub async fn check_models_api_connection(
+    api_base: &str,
+    api_key: &str,
+    model: &str,
+    proxy_url: &str,
+) -> Result<ApiCheckResult, String> {
+    let api_base = api_base.trim();
+    let api_key = api_key.trim();
+    let model = model.trim();
+    if api_key.is_empty() {
+        return Err("API Key为空".into());
+    }
+    if api_base.is_empty() {
+        return Err("API 地址为空".into());
+    }
+
+    let url = endpoint_url(api_base, "models");
+    let api_client = create_client(if proxy_url.trim().is_empty() {
+        None
+    } else {
+        Some(proxy_url.trim())
+    })?;
+
+    eprintln!(
+        "[api-check] /models 检测 | endpoint={url} model={} mode={}",
+        if model.is_empty() {
+            "(未指定)"
+        } else {
+            model
+        },
+        api_client.label
+    );
+    let resp = api_client
+        .client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "application/json")
+        .timeout(API_CHECK_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| describe_send_error(&e))?;
+
+    let status = resp.status();
+    let resp_body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(parse_http_error(status.as_u16(), &resp_body));
+    }
+
+    let value = serde_json::from_str::<Value>(&resp_body).ok();
+    let model_ids = value.as_ref().map(extract_model_ids).unwrap_or_default();
+    let model_found = if model.is_empty() || model_ids.is_empty() {
+        None
+    } else {
+        Some(model_ids.iter().any(|id| id == model))
+    };
+
+    let (status, message) = match model_found {
+        Some(true) => (
+            "ok",
+            format!("连接成功，/models 可访问，模型 `{model}` 存在。"),
+        ),
+        Some(false) => (
+            "warning",
+            format!(
+                "连接成功，/models 可访问，但模型列表中未找到 `{model}`。请确认模型名称是否由该服务提供。"
+            ),
+        ),
+        None if model.is_empty() => (
+            "ok",
+            "连接成功，/models 可访问。未填写模型名，已跳过模型匹配。".into(),
+        ),
+        None => (
+            "ok",
+            "基础连接成功，/models 可访问；该服务未返回标准模型列表，已跳过模型名匹配。".into(),
+        ),
+    };
+
+    Ok(ApiCheckResult {
+        ok: true,
+        status: status.into(),
+        message,
+        endpoint: url,
+        model: model.into(),
+        model_found,
+    })
+}
+
 pub async fn call_responses_api(
     api_base: &str,
     api_key: &str,
     prompt: &str,
+    input_image_data_url: Option<&str>,
     model: &str,
     count: u32,
     size: &str,
@@ -176,14 +300,25 @@ pub async fn call_responses_api(
     }
 
     let url = endpoint_url(api_base, "responses");
-    eprintln!("[api] /responses 请求模型={model} size={size} count={count}");
+    eprintln!(
+        "[api] /responses 请求模型={model} size={size} count={count} input_image={}",
+        input_image_data_url.is_some()
+    );
 
-    let body = serde_json::json!({
-        "model": model,
-        "input": prompt,
-        "tools": [{"type": "image_generation", "size": size, "n": count}],
-        "stream": true,
-    });
+    let body = build_responses_image_generation_body(
+        model,
+        prompt,
+        input_image_data_url,
+        count,
+        size,
+        true,
+    );
+    let body_bytes =
+        serde_json::to_vec(&body).map_err(|e| format!("序列化 Responses 请求失败: {e}"))?;
+    eprintln!(
+        "[api] /responses 请求体大小约 {:.1} KiB",
+        body_bytes.len() as f64 / 1024.0
+    );
 
     let api_client = create_client(if proxy_url.is_empty() {
         None
@@ -192,19 +327,34 @@ pub async fn call_responses_api(
     })?;
 
     eprintln!("[api] /responses 尝试 {} (stream/sized)", api_client.label);
-    let resp = api_client
-        .client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            let msg = describe_send_error(&e);
-            eprintln!("[api] /responses 请求失败: {msg}");
-            msg
-        })?;
+    let max_attempts = if input_image_data_url.is_some() { 1 } else { 2 };
+    let mut resp = None;
+    for attempt in 1..=max_attempts {
+        match api_client
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .body(body_bytes.clone())
+            .send()
+            .await
+        {
+            Ok(value) => {
+                resp = Some(value);
+                break;
+            }
+            Err(e) => {
+                let msg = describe_send_error(&e);
+                if attempt < max_attempts && is_retryable_send_error(&e) {
+                    eprintln!("[api] /responses 请求失败，将重试一次: {msg}");
+                    continue;
+                }
+                eprintln!("[api] /responses 请求失败: {msg}");
+                return Err(msg);
+            }
+        }
+    }
+    let resp = resp.ok_or_else(|| "Responses API 请求未返回响应".to_string())?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -217,12 +367,43 @@ pub async fn call_responses_api(
     read_responses_stream_images(resp, count).await
 }
 
+fn build_responses_image_generation_body(
+    model: &str,
+    prompt: &str,
+    input_image_data_url: Option<&str>,
+    count: u32,
+    size: &str,
+    stream: bool,
+) -> Value {
+    let input = if let Some(image_url) = input_image_data_url.filter(|value| !value.is_empty()) {
+        serde_json::json!([
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": image_url}
+                ]
+            }
+        ])
+    } else {
+        Value::String(prompt.to_string())
+    };
+
+    serde_json::json!({
+        "model": model,
+        "input": input,
+        "tools": [{"type": "image_generation", "size": size, "n": count}],
+        "stream": stream,
+    })
+}
+
 /// POST /responses — 文本请求，用于提示词优化。
 pub async fn call_responses_text_api(
     api_base: &str,
     api_key: &str,
     instructions: &str,
     input: &str,
+    input_image_data_url: Option<&str>,
     model: &str,
     proxy_url: &str,
 ) -> Result<String, String> {
@@ -238,20 +419,60 @@ pub async fn call_responses_text_api(
             api_key,
             instructions,
             input,
+            input_image_data_url,
             model,
             proxy_url,
         )
         .await;
     }
 
+    match call_responses_text_api_once(
+        api_base,
+        api_key,
+        instructions,
+        input,
+        input_image_data_url,
+        model,
+        proxy_url,
+    )
+    .await
+    {
+        Ok(text) => Ok(text),
+        Err(responses_error) if should_try_chat_completions_text_fallback(&responses_error) => {
+            eprintln!(
+                "[api] /responses 文本接口不可用，尝试 /chat/completions 兜底: {responses_error}"
+            );
+            call_chat_completions_text_api(
+                api_base,
+                api_key,
+                instructions,
+                input,
+                input_image_data_url,
+                model,
+                proxy_url,
+            )
+            .await
+            .map_err(|chat_error| {
+                    format!(
+                        "/responses 文本接口失败：{responses_error}；/chat/completions 兜底失败：{chat_error}"
+                    )
+                })
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn call_responses_text_api_once(
+    api_base: &str,
+    api_key: &str,
+    instructions: &str,
+    input: &str,
+    input_image_data_url: Option<&str>,
+    model: &str,
+    proxy_url: &str,
+) -> Result<String, String> {
     let url = endpoint_url(api_base, "responses");
     eprintln!("[api] /responses 文本请求模型={model}");
-
-    let body = serde_json::json!({
-        "model": model,
-        "instructions": instructions,
-        "input": input,
-    });
 
     let api_client = create_client(if proxy_url.is_empty() {
         None
@@ -259,10 +480,81 @@ pub async fn call_responses_text_api(
         Some(proxy_url)
     })?;
 
-    eprintln!("[api] /responses 尝试 {} (normal/text)", api_client.label);
+    let first_uses_list_input = input_image_data_url.is_some();
+    let string_body = build_responses_text_body(
+        model,
+        instructions,
+        input,
+        input_image_data_url,
+        first_uses_list_input,
+    );
+    let first_input_shape = if first_uses_list_input {
+        "list+image"
+    } else {
+        "string"
+    };
+    match send_responses_text_request(&api_client, &url, api_key, &string_body, first_input_shape)
+        .await
+    {
+        Ok(text) => Ok(text),
+        Err(string_error)
+            if !first_uses_list_input && should_retry_responses_text_list_input(&string_error) =>
+        {
+            eprintln!(
+                "[api] /responses 文本请求要求 input 列表，使用 list input 重试: {string_error}"
+            );
+            let list_body =
+                build_responses_text_body(model, instructions, input, input_image_data_url, true);
+            send_responses_text_request(&api_client, &url, api_key, &list_body, "list")
+                .await
+                .map_err(|list_error| {
+                    format!(
+                        "/responses string input 失败：{string_error}；list input 重试失败：{list_error}"
+                    )
+                })
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn build_responses_text_body(
+    model: &str,
+    instructions: &str,
+    input: &str,
+    input_image_data_url: Option<&str>,
+    use_list_input: bool,
+) -> Value {
+    let input_value = if use_list_input || input_image_data_url.is_some() {
+        let mut content = vec![serde_json::json!({"type": "input_text", "text": input})];
+        if let Some(image_url) = input_image_data_url.filter(|value| !value.trim().is_empty()) {
+            content.push(serde_json::json!({"type": "input_image", "image_url": image_url}));
+        }
+        serde_json::json!([{ "role": "user", "content": content }])
+    } else {
+        Value::String(input.to_string())
+    };
+
+    serde_json::json!({
+        "model": model,
+        "instructions": instructions,
+        "input": input_value,
+    })
+}
+
+async fn send_responses_text_request(
+    api_client: &ApiHttpClient,
+    url: &str,
+    api_key: &str,
+    body: &Value,
+    input_shape: &str,
+) -> Result<String, String> {
+    eprintln!(
+        "[api] /responses 尝试 {} (normal/text input={input_shape})",
+        api_client.label
+    );
     let resp = api_client
         .client
-        .post(&url)
+        .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&body)
@@ -275,6 +567,12 @@ pub async fn call_responses_text_api(
         })?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let resp_body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         let msg = parse_http_error(status.as_u16(), &resp_body);
@@ -282,11 +580,32 @@ pub async fn call_responses_text_api(
         return Err(msg);
     }
 
-    let value: Value =
-        serde_json::from_str(&resp_body).map_err(|e| format!("解析文本响应失败: {e}"))?;
-    let text =
-        extract_response_text(&value).ok_or_else(|| "Responses API 未返回文本内容".to_string())?;
-    Ok(text.trim().to_string())
+    parse_text_api_response("Responses API", &resp_body, &content_type)
+}
+
+fn should_retry_responses_text_list_input(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("input must be a list")
+        || lower.contains("input should be a list")
+        || lower.contains("expected a list")
+        || lower.contains("expected list")
+        || lower.contains("invalid type for 'input'")
+        || lower.contains("invalid type for input")
+}
+
+fn should_try_chat_completions_text_fallback(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("返回了 html 页面")
+        || lower.contains("http 404")
+        || lower.contains("http 405")
+        || lower.contains("http 501")
+        || lower.contains("not found")
+        || lower.contains("unknown endpoint")
+        || lower.contains("unsupported endpoint")
+        || lower.contains("unsupported url")
+        || lower.contains("responses api 未返回文本内容")
+        || lower.contains("解析文本响应失败")
+        || lower.contains("http 成功但响应体为空")
 }
 
 async fn call_chat_completions_text_api(
@@ -294,17 +613,28 @@ async fn call_chat_completions_text_api(
     api_key: &str,
     instructions: &str,
     input: &str,
+    input_image_data_url: Option<&str>,
     model: &str,
     proxy_url: &str,
 ) -> Result<String, String> {
     let url = endpoint_url(api_base, "chat/completions");
     eprintln!("[api] /chat/completions 文本请求模型={model}");
 
+    let user_content =
+        if let Some(image_url) = input_image_data_url.filter(|value| !value.trim().is_empty()) {
+            serde_json::json!([
+                {"type": "text", "text": input},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ])
+        } else {
+            Value::String(input.to_string())
+        };
+
     let body = serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": instructions},
-            {"role": "user", "content": input}
+            {"role": "user", "content": user_content}
         ],
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
@@ -335,6 +665,12 @@ async fn call_chat_completions_text_api(
         })?;
 
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let resp_body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
         let msg = parse_http_error(status.as_u16(), &resp_body);
@@ -342,17 +678,100 @@ async fn call_chat_completions_text_api(
         return Err(msg);
     }
 
-    let value: Value =
-        serde_json::from_str(&resp_body).map_err(|e| format!("解析文本响应失败: {e}"))?;
-    let text = extract_response_text(&value)
-        .ok_or_else(|| "Chat Completions API 未返回文本内容".to_string())?;
-    Ok(text.trim().to_string())
+    parse_text_api_response("Chat Completions API", &resp_body, &content_type)
 }
 
 fn should_use_chat_completions(api_base: &str, model: &str) -> bool {
     let api_base = api_base.to_ascii_lowercase();
     let model = model.to_ascii_lowercase();
     api_base.contains("api.deepseek.com") || model.starts_with("deepseek")
+}
+
+fn parse_text_api_response(
+    service_name: &str,
+    resp_body: &str,
+    content_type: &str,
+) -> Result<String, String> {
+    let trimmed = resp_body.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{service_name} 返回空响应：HTTP 成功但响应体为空"));
+    }
+
+    let content_type = content_type.to_ascii_lowercase();
+    if content_type.contains("text/html")
+        || trimmed.starts_with("<!doctype")
+        || trimmed.starts_with("<html")
+    {
+        return Err(format!(
+            "{service_name} 返回了 HTML 页面，不是可解析的文本 API 响应；通常表示 API 地址填成了网页首页/控制台地址，或缺少 /v1 这样的 API 路径；响应预览: {}",
+            response_preview(trimmed)
+        ));
+    }
+
+    if looks_like_sse_body(trimmed) {
+        if let Some(text) = extract_response_text_from_sse_body(trimmed) {
+            return Ok(text.trim().to_string());
+        }
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if is_direct_text_payload(&value) {
+            return Ok(trimmed.to_string());
+        }
+        let text = extract_response_text(&value).ok_or_else(|| {
+            format!(
+                "{service_name} 未返回文本内容；响应预览: {}",
+                response_preview(trimmed)
+            )
+        })?;
+        return Ok(text.trim().to_string());
+    }
+
+    if content_type.contains("text/plain") || may_be_plain_model_text(trimmed) {
+        return Ok(trimmed.to_string());
+    }
+
+    Err(format!(
+        "解析文本响应失败：响应不是 JSON、SSE 或纯文本；响应预览: {}",
+        response_preview(trimmed)
+    ))
+}
+
+fn looks_like_sse_body(value: &str) -> bool {
+    value.starts_with("data:") || value.contains("\ndata:") || value.contains("\r\ndata:")
+}
+
+fn extract_response_text_from_sse_body(raw: &str) -> Option<String> {
+    let mut chunks = Vec::new();
+    for payload in sse_data_payloads(raw) {
+        if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+            collect_response_text_chunks(&value, &mut chunks);
+        } else if !payload.trim().is_empty() {
+            chunks.push(payload);
+        }
+    }
+    let text = chunks
+        .into_iter()
+        .map(|chunk| chunk.trim().to_string())
+        .filter(|chunk| !chunk.is_empty())
+        .collect::<Vec<_>>()
+        .join("");
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn is_direct_text_payload(value: &Value) -> bool {
+    value.get("prompt").is_some()
+        || value.get("negative_prompt").is_some()
+        || value.get("grid_rows").is_some()
+        || value.get("ok").is_some()
+}
+
+fn may_be_plain_model_text(value: &str) -> bool {
+    !value.starts_with('{') && !value.starts_with('[') && !value.starts_with('<')
 }
 
 async fn read_responses_stream_images(
@@ -449,6 +868,11 @@ fn collect_response_text_chunks(value: &Value, chunks: &mut Vec<String>) {
             }
         }
         Value::Object(map) => {
+            if looks_like_prompt_optimizer_payload(value) {
+                if let Ok(text) = serde_json::to_string(value) {
+                    chunks.push(text);
+                }
+            }
             let type_name = map.get("type").and_then(Value::as_str).unwrap_or_default();
             if (type_name == "output_text" || type_name == "text")
                 && map.get("text").and_then(Value::as_str).is_some()
@@ -463,9 +887,17 @@ fn collect_response_text_chunks(value: &Value, chunks: &mut Vec<String>) {
             } else if let Some(text) = map.get("content").and_then(Value::as_str) {
                 chunks.push(text.to_string());
             }
+            if type_name != "message" {
+                if let Some(content) = map.get("content").filter(|value| !value.is_string()) {
+                    collect_response_text_chunks(content, chunks);
+                }
+            }
 
             if let Some(output) = map.get("output") {
                 collect_response_text_chunks(output, chunks);
+            }
+            if let Some(data) = map.get("data") {
+                collect_response_text_chunks(data, chunks);
             }
             if let Some(choices) = map.get("choices") {
                 collect_response_text_chunks(choices, chunks);
@@ -473,9 +905,26 @@ fn collect_response_text_chunks(value: &Value, chunks: &mut Vec<String>) {
             if let Some(message) = map.get("message") {
                 collect_response_text_chunks(message, chunks);
             }
+            if let Some(delta) = map.get("delta") {
+                if let Some(text) = delta.as_str() {
+                    chunks.push(text.to_string());
+                } else {
+                    collect_response_text_chunks(delta, chunks);
+                }
+            }
         }
         _ => {}
     }
+}
+
+fn looks_like_prompt_optimizer_payload(value: &Value) -> bool {
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    map.get("prompt").and_then(Value::as_str).is_some()
+        && map.get("negative_prompt").is_some()
+        && map.get("grid_rows").is_some()
+        && map.get("grid_cols").is_some()
 }
 
 fn process_complete_sse_events(
@@ -602,7 +1051,6 @@ fn normalize_image_base64(value: &str) -> String {
     value.to_string()
 }
 
-#[cfg(test)]
 fn sse_data_payloads(raw: &str) -> Vec<String> {
     let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
     let mut payloads = Vec::new();
@@ -688,6 +1136,47 @@ fn endpoint_url(api_base: &str, endpoint: &str) -> String {
     format!("{}/{}", api_base.trim_end_matches('/'), endpoint)
 }
 
+fn extract_model_ids(value: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(data) = value.get("data").and_then(Value::as_array) {
+        collect_model_ids_from_value(&Value::Array(data.clone()), &mut ids);
+    } else if let Some(models) = value.get("models").and_then(Value::as_array) {
+        collect_model_ids_from_value(&Value::Array(models.clone()), &mut ids);
+    } else if let Some(items) = value.as_array() {
+        collect_model_ids_from_value(&Value::Array(items.clone()), &mut ids);
+    } else {
+        collect_model_ids_from_value(value, &mut ids);
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn collect_model_ids_from_value(value: &Value, ids: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(id) = item.as_str() {
+                    ids.push(id.to_string());
+                } else {
+                    collect_model_ids_from_value(item, ids);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for key in ["id", "name", "model", "model_id", "modelId", "model_name"] {
+                if let Some(id) = map.get(key).and_then(Value::as_str) {
+                    ids.push(id.to_string());
+                }
+            }
+            for child in map.values() {
+                collect_model_ids_from_value(child, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,5 +1202,202 @@ mod tests {
         let body = format!("x{}", "错".repeat(180));
         let result = std::panic::catch_unwind(|| parse_http_error(500, &body));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn text_api_parser_reports_empty_success_body() {
+        let err = parse_text_api_response("Responses API", "", "application/json").unwrap_err();
+        assert!(err.contains("HTTP 成功但响应体为空"));
+    }
+
+    #[test]
+    fn text_api_parser_accepts_sse_text_deltas() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"true}\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let text =
+            parse_text_api_response("Chat Completions API", raw, "text/event-stream").unwrap();
+        assert_eq!(text, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn text_api_parser_accepts_direct_optimizer_json() {
+        let raw = r#"{"prompt":"角色跑步","negative_prompt":"","grid_rows":2,"grid_cols":3}"#;
+        let text = parse_text_api_response("Responses API", raw, "application/json").unwrap();
+        assert_eq!(text, raw);
+    }
+
+    #[test]
+    fn text_api_parser_extracts_nested_optimizer_json() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": {
+                            "prompt": "角色跑步",
+                            "negative_prompt": "",
+                            "grid_rows": 2,
+                            "grid_cols": 3
+                        }
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        let text =
+            parse_text_api_response("Chat Completions API", &raw, "application/json").unwrap();
+        assert!(text.contains("\"prompt\":\"角色跑步\""));
+    }
+
+    #[test]
+    fn responses_text_body_can_use_list_input_shape() {
+        let body = build_responses_text_body("model-a", "system", "hello", None, true);
+
+        assert_eq!(body["model"], "model-a");
+        assert_eq!(body["instructions"], "system");
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn responses_text_body_can_include_reference_image() {
+        let body = build_responses_text_body(
+            "model-a",
+            "system",
+            "hello",
+            Some("data:image/jpeg;base64,abc"),
+            false,
+        );
+
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(
+            body["input"][0]["content"][1]["image_url"],
+            "data:image/jpeg;base64,abc"
+        );
+    }
+
+    #[test]
+    fn responses_text_retry_detects_input_list_error() {
+        assert!(should_retry_responses_text_list_input(
+            "HTTP 400: Input must be a list"
+        ));
+        assert!(should_retry_responses_text_list_input(
+            "invalid type for 'input'"
+        ));
+        assert!(!should_retry_responses_text_list_input(
+            "HTTP 401: invalid api key"
+        ));
+    }
+
+    #[test]
+    fn text_api_parser_rejects_html_body_with_preview() {
+        let err = parse_text_api_response(
+            "Responses API",
+            "<html><body>not api</body></html>",
+            "text/html",
+        )
+        .unwrap_err();
+        assert!(err.contains("返回了 HTML 页面"));
+        assert!(err.contains("缺少 /v1"));
+        assert!(err.contains("not api"));
+    }
+
+    #[test]
+    fn responses_text_errors_indicate_when_chat_fallback_is_useful() {
+        assert!(should_try_chat_completions_text_fallback(
+            "Responses API 返回了 HTML 页面"
+        ));
+        assert!(should_try_chat_completions_text_fallback(
+            "HTTP 404: not found"
+        ));
+        assert!(!should_try_chat_completions_text_fallback(
+            "HTTP 401: invalid api key"
+        ));
+    }
+
+    #[test]
+    fn image_generation_body_uses_plain_text_input_without_reference_image() {
+        let body = build_responses_image_generation_body(
+            "model-a",
+            "draw a sprite",
+            None,
+            2,
+            "1024x1024",
+            true,
+        );
+
+        assert_eq!(body["model"], "model-a");
+        assert_eq!(body["input"], "draw a sprite");
+        assert_eq!(body["tools"][0]["type"], "image_generation");
+        assert_eq!(body["tools"][0]["n"], 2);
+        assert_eq!(body["tools"][0]["size"], "1024x1024");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn image_generation_body_uses_multimodal_input_with_reference_image() {
+        let image = "data:image/png;base64,abc";
+        let body = build_responses_image_generation_body(
+            "model-a",
+            "redraw this icon",
+            Some(image),
+            1,
+            "1024x1024",
+            true,
+        );
+
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][0]["content"][0]["text"], "redraw this icon");
+        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
+        assert_eq!(body["input"][0]["content"][1]["image_url"], image);
+        assert_eq!(body["tools"][0]["type"], "image_generation");
+    }
+
+    #[test]
+    fn model_id_extractor_accepts_openai_models_shape() {
+        let value = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "model-a", "object": "model"},
+                {"id": "model-b", "object": "model"}
+            ]
+        });
+
+        assert_eq!(extract_model_ids(&value), vec!["model-a", "model-b"]);
+    }
+
+    #[test]
+    fn model_id_extractor_accepts_string_model_arrays() {
+        let value = serde_json::json!({
+            "models": ["model-b", "model-a", "model-a"]
+        });
+
+        assert_eq!(extract_model_ids(&value), vec!["model-a", "model-b"]);
+    }
+
+    #[test]
+    fn model_id_extractor_accepts_nested_nonstandard_shapes() {
+        let value = serde_json::json!({
+            "result": {
+                "items": [
+                    {"model": "model-c"},
+                    {"model_name": "model-a"},
+                    {"config": {"model_id": "model-b"}}
+                ]
+            }
+        });
+
+        assert_eq!(
+            extract_model_ids(&value),
+            vec!["model-a", "model-b", "model-c"]
+        );
     }
 }

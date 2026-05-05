@@ -155,7 +155,13 @@ pub struct UserConfig {
     #[serde(default = "default_prompt_optimizer_model")]
     pub prompt_optimizer_model: String,
     #[serde(default)]
+    pub prompt_optimizer_vision: bool,
+    #[serde(default)]
     pub save_dir: String,
+    #[serde(default)]
+    pub ffmpeg_path: String,
+    #[serde(default)]
+    pub ffprobe_path: String,
     #[serde(default)]
     pub prompt_history: VecDeque<String>,
 }
@@ -174,7 +180,10 @@ impl Default for UserConfig {
             prompt_optimizer_api_key: String::new(),
             prompt_optimizer_api_base: default_prompt_optimizer_api_base(),
             prompt_optimizer_model: default_prompt_optimizer_model(),
+            prompt_optimizer_vision: false,
             save_dir: String::new(),
+            ffmpeg_path: String::new(),
+            ffprobe_path: String::new(),
             prompt_history: VecDeque::with_capacity(100),
         }
     }
@@ -289,5 +298,8 @@ mod tests {
         assert_eq!(config.last_count, 1);
         assert_eq!(config.prompt_optimizer_api_base, "https://api.deepseek.com");
         assert_eq!(config.prompt_optimizer_model, "deepseek-v4-flash");
+        assert!(!config.prompt_optimizer_vision);
+        assert_eq!(config.ffmpeg_path, "");
+        assert_eq!(config.ffprobe_path, "");
     }
 }

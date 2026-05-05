@@ -34,7 +34,10 @@ export interface UserConfig {
   prompt_optimizer_api_key: string;
   prompt_optimizer_api_base: string;
   prompt_optimizer_model: string;
+  prompt_optimizer_vision: boolean;
   save_dir: string;
+  ffmpeg_path: string;
+  ffprobe_path: string;
   prompt_history: string[];
 }
 
@@ -121,6 +124,60 @@ export interface PromptOptimizationResult {
   negativePrompt: string;
   gridRows: number;
   gridCols: number;
+  warning?: string;
+}
+
+export interface SavedImageResult {
+  file_path: string;
+  file_name: string;
+}
+
+export interface VideoProbeResult {
+  duration_seconds: number;
+  width: number;
+  height: number;
+}
+
+export interface VideoExtractRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface VideoFrameFile {
+  index: number;
+  path: string;
+  time_seconds: number;
+  width: number;
+  height: number;
+}
+
+export interface VideoFramesResult {
+  frames: VideoFrameFile[];
+  duration_seconds: number;
+  width: number;
+  height: number;
+  output_dir: string;
+}
+
+export interface VideoExtractEvent {
+  event: string;
+  data?: any;
+}
+
+export interface TempCleanupResult {
+  removed_files: number;
+  removed_dirs: number;
+}
+
+export interface ApiCheckResult {
+  ok: boolean;
+  status: "ok" | "warning";
+  message: string;
+  endpoint: string;
+  model: string;
+  modelFound?: boolean | null;
 }
 
 // ==================== 预设与配置 ====================
@@ -137,6 +194,34 @@ export async function saveConfig(config: UserConfig): Promise<void> {
   return invoke("save_config", { config });
 }
 
+export async function checkGenerationApi(
+  apiKey: string,
+  apiBase: string,
+  model: string,
+  proxyUrl: string
+): Promise<ApiCheckResult> {
+  return invoke<ApiCheckResult>("check_generation_api", {
+    apiKey,
+    apiBase,
+    model,
+    proxyUrl,
+  });
+}
+
+export async function checkPromptOptimizerApi(
+  apiKey: string,
+  apiBase: string,
+  model: string,
+  proxyUrl: string
+): Promise<ApiCheckResult> {
+  return invoke<ApiCheckResult>("check_prompt_optimizer_api", {
+    apiKey,
+    apiBase,
+    model,
+    proxyUrl,
+  });
+}
+
 // ==================== 生成图片 ====================
 
 export async function generateImage(
@@ -149,7 +234,8 @@ export async function generateImage(
   style: string,
   ratio: string,
   resolution: string,
-  count: number
+  count: number,
+  referenceImagePath: string
 ): Promise<GenerationResult> {
   return invoke<GenerationResult>("generate_image", {
     channel,
@@ -162,6 +248,7 @@ export async function generateImage(
     ratio,
     resolution,
     count,
+    referenceImagePath,
   });
 }
 
@@ -219,6 +306,10 @@ export async function readImageAsBase64(path: string): Promise<string> {
   return invoke<string>("read_image_as_base64", { path });
 }
 
+export async function readFileAsBase64(path: string): Promise<string> {
+  return invoke<string>("read_file_as_base64", { path });
+}
+
 export async function optimizePrompt(
   apiKey: string,
   apiBase: string,
@@ -229,7 +320,9 @@ export async function optimizePrompt(
   ratio: string,
   resolution: string,
   gridRows: number,
-  gridCols: number
+  gridCols: number,
+  referenceImagePath: string,
+  useReferenceImageUnderstanding: boolean
 ): Promise<PromptOptimizationResult> {
   return invoke<PromptOptimizationResult>("optimize_prompt", {
     apiKey,
@@ -242,6 +335,8 @@ export async function optimizePrompt(
     resolution,
     gridRows,
     gridCols,
+    referenceImagePath,
+    useReferenceImageUnderstanding,
   });
 }
 
@@ -283,6 +378,44 @@ export async function exportGif(
   });
 }
 
+export async function saveSpriteSheetDataUrl(
+  dataUrl: string,
+  fileName: string
+): Promise<SavedImageResult> {
+  return invoke<SavedImageResult>("save_sprite_sheet_data_url", {
+    dataUrl,
+    fileName,
+  });
+}
+
+export async function probeVideoFile(videoPath: string): Promise<VideoProbeResult> {
+  return invoke<VideoProbeResult>("probe_video_file", { videoPath });
+}
+
+export async function extractVideoFramesWithFfmpeg(
+  channel: Channel<VideoExtractEvent>,
+  videoPath: string,
+  frameCount: number,
+  startSeconds: number,
+  endSeconds: number,
+  cropRegion?: VideoExtractRegion,
+  maxExtractEdge?: number
+): Promise<VideoFramesResult> {
+  return invoke<VideoFramesResult>("extract_video_frames_with_ffmpeg", {
+    channel,
+    videoPath,
+    frameCount,
+    startSeconds,
+    endSeconds,
+    cropRegion: cropRegion ?? null,
+    maxExtractEdge: maxExtractEdge ?? null,
+  });
+}
+
+export async function logVideoSpriteMessage(message: string): Promise<void> {
+  return invoke("log_video_sprite_message", { message });
+}
+
 // ==================== 文件操作 ====================
 
 export async function selectDirectory(): Promise<string> {
@@ -291,6 +424,26 @@ export async function selectDirectory(): Promise<string> {
 
 export async function openImageFile(): Promise<FileOpenResult> {
   return invoke<FileOpenResult>("open_image_file");
+}
+
+export async function openVideoFile(): Promise<FileOpenResult> {
+  return invoke<FileOpenResult>("open_video_file");
+}
+
+export async function prepareVideoFileForPlayback(sourcePath: string): Promise<FileOpenResult> {
+  return invoke<FileOpenResult>("prepare_video_file_for_playback", { sourcePath });
+}
+
+export async function cleanupPreparedVideoFile(path: string): Promise<TempCleanupResult> {
+  return invoke<TempCleanupResult>("cleanup_prepared_video_file", { path });
+}
+
+export async function cleanupVideoFrameBatchDir(outputDir: string): Promise<TempCleanupResult> {
+  return invoke<TempCleanupResult>("cleanup_video_frame_batch_dir", { outputDir });
+}
+
+export async function cleanupVideoSpriteTempFiles(): Promise<TempCleanupResult> {
+  return invoke<TempCleanupResult>("cleanup_video_sprite_temp_files");
 }
 
 export async function revealInExplorer(path: string): Promise<void> {

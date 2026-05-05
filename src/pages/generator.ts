@@ -3,6 +3,8 @@ import {
   getPresets,
   loadConfig,
   saveConfig,
+  checkGenerationApi,
+  checkPromptOptimizerApi,
   generateImage,
   getPromptHistory,
   addPromptHistory,
@@ -20,6 +22,7 @@ import {
   openImageFilePath,
   type PresetsPayload,
   type UserConfig,
+  type ApiCheckResult,
   type GenerateEvent,
   type GenerationResult,
   type WorkbenchRecord,
@@ -81,6 +84,8 @@ export class GeneratorPage {
   private mattingCanvasLoadToken: number = 0;
   private mattingUndoStack: ImageData[] = [];
   private mattingRedoStack: ImageData[] = [];
+  private referenceImagePath: string = "";
+  private referenceImageName: string = "";
 
   // DOM元素缓存
   private els!: {
@@ -90,17 +95,29 @@ export class GeneratorPage {
     toggleKey: HTMLButtonElement;
     model: HTMLInputElement;
     modelList: HTMLDataListElement;
+    checkGenerationApi: HTMLButtonElement;
+    generationApiCheckStatus: HTMLElement;
     optimizePrompt: HTMLButtonElement;
     promptOptimizerApiKey: HTMLInputElement;
     promptOptimizerApiBase: HTMLInputElement;
     promptOptimizerModel: HTMLInputElement;
+    promptOptimizerVision: HTMLInputElement;
+    checkPromptOptimizerApi: HTMLButtonElement;
+    promptOptimizerApiCheckStatus: HTMLElement;
     style: HTMLSelectElement;
     ratio: HTMLSelectElement;
     resolution: HTMLSelectElement;
     count: HTMLSelectElement;
     prompt: HTMLTextAreaElement;
     negPrompt: HTMLInputElement;
+    referenceImageName: HTMLInputElement;
+    referenceImagePreview: HTMLImageElement;
+    referenceImageEmpty: HTMLElement;
+    pickReferenceImage: HTMLButtonElement;
+    clearReferenceImage: HTMLButtonElement;
     saveDir: HTMLInputElement;
+    ffmpegPath: HTMLInputElement;
+    ffprobePath: HTMLInputElement;
     browseDir: HTMLButtonElement;
     generate: HTMLButtonElement;
     viewImage: HTMLButtonElement;
@@ -200,17 +217,29 @@ export class GeneratorPage {
       toggleKey: g("btn-toggle-key") as HTMLButtonElement,
       model: g("model-input") as HTMLInputElement,
       modelList: g("model-list") as HTMLDataListElement,
+      checkGenerationApi: g("btn-check-generation-api") as HTMLButtonElement,
+      generationApiCheckStatus: g("generation-api-check-status"),
       optimizePrompt: g("btn-optimize-prompt") as HTMLButtonElement,
       promptOptimizerApiKey: g("prompt-optimizer-api-key") as HTMLInputElement,
       promptOptimizerApiBase: g("prompt-optimizer-api-base") as HTMLInputElement,
       promptOptimizerModel: g("prompt-optimizer-model-input") as HTMLInputElement,
+      promptOptimizerVision: g("prompt-optimizer-vision") as HTMLInputElement,
+      checkPromptOptimizerApi: g("btn-check-prompt-optimizer-api") as HTMLButtonElement,
+      promptOptimizerApiCheckStatus: g("prompt-optimizer-api-check-status"),
       style: g("style-select") as HTMLSelectElement,
       ratio: g("ratio-select") as HTMLSelectElement,
       resolution: g("resolution-select") as HTMLSelectElement,
       count: g("count-select") as HTMLSelectElement,
       prompt: g("prompt-input") as HTMLTextAreaElement,
       negPrompt: g("neg-prompt-input") as HTMLInputElement,
+      referenceImageName: g("reference-image-name") as HTMLInputElement,
+      referenceImagePreview: g("reference-image-preview") as HTMLImageElement,
+      referenceImageEmpty: g("reference-image-empty"),
+      pickReferenceImage: g("btn-pick-reference-image") as HTMLButtonElement,
+      clearReferenceImage: g("btn-clear-reference-image") as HTMLButtonElement,
       saveDir: g("save-dir-input") as HTMLInputElement,
+      ffmpegPath: g("ffmpeg-path") as HTMLInputElement,
+      ffprobePath: g("ffprobe-path") as HTMLInputElement,
       browseDir: g("btn-browse-dir") as HTMLButtonElement,
       generate: g("btn-generate") as HTMLButtonElement,
       viewImage: g("btn-view-image") as HTMLButtonElement,
@@ -287,6 +316,11 @@ export class GeneratorPage {
     }
   }
 
+  setExternalReferenceImage(path: string, name?: string): void {
+    this.setReferenceImage(path, name || getFileName(path) || "参考图");
+    this.els.toolbarStatus.textContent = "已设置参考图";
+  }
+
   private populateDropdowns(): void {
     if (!this.presets) return;
 
@@ -334,6 +368,7 @@ export class GeneratorPage {
       c.prompt_optimizer_api_base || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
     this.els.promptOptimizerModel.value =
       c.prompt_optimizer_model || DEFAULT_PROMPT_OPTIMIZER_MODEL;
+    this.els.promptOptimizerVision.checked = Boolean(c.prompt_optimizer_vision);
     setSelectValue(this.els.style, c.last_style);
     setSelectValue(this.els.ratio, c.last_ratio);
     setSelectValue(this.els.resolution, c.last_resolution);
@@ -341,6 +376,8 @@ export class GeneratorPage {
     if (c.save_dir) {
       this.els.saveDir.value = c.save_dir;
     }
+    this.els.ffmpegPath.value = c.ffmpeg_path || "";
+    this.els.ffprobePath.value = c.ffprobe_path || "";
   }
 
   private bindEvents(): void {
@@ -355,6 +392,14 @@ export class GeneratorPage {
       this.els.toggleKey.textContent = isPwd ? "🙈" : "👁";
     });
 
+    this.els.checkGenerationApi.addEventListener("click", () => {
+      this.handleCheckGenerationApi();
+    });
+
+    this.els.checkPromptOptimizerApi.addEventListener("click", () => {
+      this.handleCheckPromptOptimizerApi();
+    });
+
     // 浏览保存目录
     this.els.browseDir.addEventListener("click", async () => {
       try {
@@ -365,6 +410,14 @@ export class GeneratorPage {
       } catch (_) {
         // 用户取消
       }
+    });
+
+    this.els.pickReferenceImage.addEventListener("click", () => {
+      this.handlePickReferenceImage();
+    });
+
+    this.els.clearReferenceImage.addEventListener("click", () => {
+      this.clearReferenceImage();
     });
 
     // 生成图片
@@ -544,6 +597,112 @@ export class GeneratorPage {
     } catch (err) {
       console.warn("[generator] 加载工作台记录失败:", err);
     }
+  }
+
+  private async handlePickReferenceImage(): Promise<void> {
+    if (!this.canRunGeneratorAction("editGenerationParams")) return;
+    try {
+      const file = await openImageFile();
+      this.setReferenceImage(file.file_path, file.file_name);
+      this.els.toolbarStatus.textContent = "已选择参考图";
+    } catch (err) {
+      if (!String(err).includes("用户取消")) {
+        console.error("[generator] 选择参考图失败:", err);
+        this.els.toolbarStatus.textContent = "选择参考图失败";
+      }
+    }
+  }
+
+  private async handleCheckGenerationApi(): Promise<void> {
+    await this.runApiCheck(
+      this.els.checkGenerationApi,
+      this.els.generationApiCheckStatus,
+      () => checkGenerationApi(
+        this.els.apiKey.value.trim(),
+        this.els.apiBase.value.trim(),
+        this.els.model.value.trim(),
+        this.els.proxyUrl.value.trim()
+      )
+    );
+  }
+
+  private async handleCheckPromptOptimizerApi(): Promise<void> {
+    const apiKey = this.els.promptOptimizerApiKey.value.trim() || this.els.apiKey.value.trim();
+    const apiBase = this.els.promptOptimizerApiBase.value.trim() || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
+    const model = this.els.promptOptimizerModel.value.trim() || DEFAULT_PROMPT_OPTIMIZER_MODEL;
+    await this.runApiCheck(
+      this.els.checkPromptOptimizerApi,
+      this.els.promptOptimizerApiCheckStatus,
+      () => checkPromptOptimizerApi(
+        apiKey,
+        apiBase,
+        model,
+        this.els.proxyUrl.value.trim()
+      )
+    );
+  }
+
+  private async runApiCheck(
+    button: HTMLButtonElement,
+    statusEl: HTMLElement,
+    request: () => Promise<ApiCheckResult>
+  ): Promise<void> {
+    if (button.disabled) return;
+    const originalText = button.textContent || "检测";
+    button.disabled = true;
+    button.textContent = "检测中";
+    this.setApiCheckStatus(statusEl, "checking", "正在连接 API...");
+    this.els.toolbarStatus.textContent = "正在检测 API...";
+
+    try {
+      const result = await request();
+      const statusClass = result.status === "warning" ? "warning" : "ok";
+      this.setApiCheckStatus(statusEl, statusClass, result.message, result);
+      this.els.toolbarStatus.textContent =
+        result.status === "warning" ? "API 检测完成，有提示" : "API 检测成功";
+    } catch (err) {
+      const message = `检测失败：${String(err)}`;
+      this.setApiCheckStatus(statusEl, "error", message);
+      this.els.toolbarStatus.textContent = "API 检测失败";
+      console.error("[generator] API 检测失败:", err);
+    } finally {
+      button.textContent = originalText;
+      this.syncWorkflowControls();
+    }
+  }
+
+  private setApiCheckStatus(
+    statusEl: HTMLElement,
+    status: "ok" | "warning" | "error" | "checking",
+    message: string,
+    result?: ApiCheckResult
+  ): void {
+    statusEl.className = `config-check-status ${status}`;
+    statusEl.textContent = message;
+    statusEl.title = result
+      ? `Endpoint: ${result.endpoint}${result.model ? `\nModel: ${result.model}` : ""}`
+      : "";
+  }
+
+  private setReferenceImage(path: string, name: string): void {
+    this.referenceImagePath = path;
+    this.referenceImageName = name || getFileName(path) || "参考图";
+    this.els.referenceImageName.value = this.referenceImageName;
+    this.els.referenceImagePreview.src = convertFileSrc(path);
+    this.els.referenceImagePreview.style.display = "block";
+    this.els.referenceImageEmpty.style.display = "none";
+    this.els.clearReferenceImage.disabled = false;
+  }
+
+  private clearReferenceImage(): void {
+    this.referenceImagePath = "";
+    this.referenceImageName = "";
+    this.els.referenceImagePreview.removeAttribute("src");
+    this.els.referenceImagePreview.style.display = "none";
+    this.els.referenceImageEmpty.style.display = "inline";
+    this.els.referenceImageName.value = "无参考图";
+    this.els.clearReferenceImage.disabled = true;
+    this.els.toolbarStatus.textContent = "已移除参考图";
   }
 
   private async handleAddRecord(): Promise<void> {
@@ -947,6 +1106,7 @@ export class GeneratorPage {
     this.els.optimizePrompt.setAttribute("aria-busy", "true");
     this.els.optimizePrompt.textContent = "优化中";
     this.els.toolbarStatus.textContent = "正在优化提示词...";
+    this.els.toolbarStatus.title = "";
 
     try {
       const result = await optimizePrompt(
@@ -959,7 +1119,9 @@ export class GeneratorPage {
         this.els.ratio.value,
         this.els.resolution.value,
         this.preferredSpriteGrid.rows,
-        this.preferredSpriteGrid.cols
+        this.preferredSpriteGrid.cols,
+        this.referenceImagePath,
+        this.els.promptOptimizerVision.checked
       );
 
       this.els.prompt.value = result.prompt.trim();
@@ -969,12 +1131,21 @@ export class GeneratorPage {
         cols: normalizeGridSize(result.gridCols, this.preferredSpriteGrid.cols),
       };
       await this.saveCurrentConfig();
-      this.els.toolbarStatus.textContent = `提示词已优化 · 建议 ${this.preferredSpriteGrid.rows}x${this.preferredSpriteGrid.cols}`;
+      if (result.warning) {
+        console.warn("[generator] 提示词优化降级:", result.warning);
+        this.els.toolbarStatus.textContent = `提示词已优化 · 已降级 · 建议 ${this.preferredSpriteGrid.rows}x${this.preferredSpriteGrid.cols}`;
+        this.els.toolbarStatus.title = result.warning;
+      } else {
+        this.els.toolbarStatus.textContent = `提示词已优化 · 建议 ${this.preferredSpriteGrid.rows}x${this.preferredSpriteGrid.cols}`;
+        this.els.toolbarStatus.title = "";
+      }
       this.els.prompt.focus();
     } catch (err) {
+      const message = getErrorMessage(err);
       console.error("[generator] 提示词优化失败:", err);
-      this.els.toolbarStatus.textContent = "提示词优化失败";
-      alert("提示词优化失败: " + String(err));
+      this.els.toolbarStatus.textContent = `提示词优化失败: ${message}`;
+      this.els.toolbarStatus.title = message;
+      alert(`提示词优化失败:\n${message}`);
     } finally {
       this.els.optimizePrompt.classList.remove("is-loading");
       this.els.optimizePrompt.removeAttribute("aria-busy");
@@ -1034,7 +1205,14 @@ export class GeneratorPage {
       };
 
       // 调用后端生成
-      console.log("[generator] 即将调用 generateImage, 参数:", { model, style, ratio, resolution, count });
+      console.log("[generator] 即将调用 generateImage, 参数:", {
+        model,
+        style,
+        ratio,
+        resolution,
+        count,
+        hasReferenceImage: Boolean(this.referenceImagePath),
+      });
       const result: GenerationResult = await generateImage(
         channel,
         apiKey,
@@ -1045,7 +1223,8 @@ export class GeneratorPage {
         style,
         ratio,
         resolution,
-        count
+        count,
+        this.referenceImagePath
       );
 
       // 显示结果
@@ -1405,11 +1584,14 @@ export class GeneratorPage {
     this.config.prompt_optimizer_api_key = this.els.promptOptimizerApiKey.value.trim();
     this.config.prompt_optimizer_api_base = this.els.promptOptimizerApiBase.value.trim();
     this.config.prompt_optimizer_model = this.els.promptOptimizerModel.value.trim();
+    this.config.prompt_optimizer_vision = this.els.promptOptimizerVision.checked;
     this.config.last_style = this.els.style.value;
     this.config.last_ratio = this.els.ratio.value;
     this.config.last_resolution = this.els.resolution.value;
     this.config.last_count = normalizeCount(this.els.count.value);
     this.config.save_dir = this.els.saveDir.value;
+    this.config.ffmpeg_path = this.els.ffmpegPath.value.trim();
+    this.config.ffprobe_path = this.els.ffprobePath.value.trim();
     await saveConfig(this.config);
   }
 
@@ -1451,6 +1633,7 @@ export class GeneratorPage {
     [
       this.els.prompt,
       this.els.negPrompt,
+      this.els.referenceImageName,
       this.els.style,
       this.els.ratio,
       this.els.resolution,
@@ -1458,16 +1641,24 @@ export class GeneratorPage {
     ].forEach((control) => {
       control.disabled = !permissions.editGenerationParams;
     });
+    this.els.pickReferenceImage.disabled = !permissions.editGenerationParams;
+    this.els.clearReferenceImage.disabled =
+      !permissions.editGenerationParams || !this.referenceImagePath;
 
     [
       this.els.apiKey,
       this.els.apiBase,
       this.els.proxyUrl,
       this.els.model,
+      this.els.checkGenerationApi,
       this.els.promptOptimizerApiKey,
       this.els.promptOptimizerApiBase,
       this.els.promptOptimizerModel,
+      this.els.promptOptimizerVision,
+      this.els.checkPromptOptimizerApi,
       this.els.saveDir,
+      this.els.ffmpegPath,
+      this.els.ffprobePath,
       this.els.browseDir,
       this.els.toggleKey,
       this.els.saveConfig,
@@ -1624,6 +1815,30 @@ function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("图片载入失败"));
     image.src = dataUrl;
   });
+}
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  if (err && typeof err === "object") {
+    const record = err as Record<string, unknown>;
+    for (const key of ["message", "error", "reason"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+    try {
+      return JSON.stringify(err);
+    } catch (_) {
+      return String(err);
+    }
+  }
+  return String(err);
 }
 
 function getEraseFailureText(reason: "outside" | "no_seed" | "no_match" | "erased"): string {
