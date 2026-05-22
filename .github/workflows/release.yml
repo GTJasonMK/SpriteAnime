@@ -269,6 +269,10 @@ jobs:
 
           npx tauri build "${args[@]}"
 
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            bash scripts/postprocess-appimage.sh
+          fi
+
       - name: Write bundle metadata
         shell: bash
         run: |

@@ -49,11 +49,16 @@ cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
 rm -rf "$BUILD_DIR"
 TAURI_BUILD_LOG="$PROJECT_ROOT/logs/tauri-build.log"
-if npx tauri build --bundles deb,rpm 2>&1 | tee "$TAURI_BUILD_LOG"; then
+if npx tauri build --bundles deb,rpm,appimage 2>&1 | tee "$TAURI_BUILD_LOG"; then
     grep -E "(Bundling|Finished|error|Bundle)" "$TAURI_BUILD_LOG" | tail -10 || true
 else
     error "Tauri 打包失败，详见 logs/tauri-build.log"
     exit 1
+fi
+
+if [ -d "$BUILD_DIR/appimage" ]; then
+    step "修正 AppImage 启动环境"
+    bash "$PROJECT_ROOT/scripts/postprocess-appimage.sh" "$BUILD_DIR/appimage"
 fi
 
 # ---- 收集产物 ----
