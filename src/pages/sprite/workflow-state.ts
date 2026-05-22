@@ -1,3 +1,5 @@
+import { createWorkflowActionChecker } from "../workflow-permissions";
+
 export type SpriteWorkflowState =
   | "empty"
   | "loadingPreview"
@@ -48,8 +50,7 @@ export function getSpriteWorkflowPermissions(
   state: SpriteWorkflowState,
   context: SpriteWorkflowContext
 ): SpritePermissions {
-  const allowed = new Set<SpriteAction>(SPRITE_ALLOWED_ACTIONS[state]);
-  const can = (action: SpriteAction): boolean => allowed.has(action);
+  const can = createWorkflowActionChecker(SPRITE_ALLOWED_ACTIONS, state);
   return {
     pickImage: can("pickImage"),
     selectImage: can("selectImage"),

@@ -5,24 +5,14 @@
 # ============================================================
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="$PROJECT_ROOT/output"
 BUILD_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle"
 
-info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
-step()  { echo -e "\n${CYAN}═══ $* ═══${NC}"; }
-
 MODE="${1:---release}"
 
-echo -e "${CYAN}"
-echo "╔══════════════════════════════════════╗"
-echo "║   SpriteAnimte — 生产构建           ║"
-echo "╚══════════════════════════════════════╝"
-echo -e "${NC}"
+banner "SpriteAnimte - 生产构建"
 
 cd "$PROJECT_ROOT"
 
@@ -38,13 +28,12 @@ fi
 
 # ---- 前端构建 ----
 step "构建前端 (Vite)"
-npx vite build 2>&1
+run_vite_build 0
 info "前端构建完成 → dist/"
 
 # ---- Rust Release 构建 ----
 step "构建 Rust Release 二进制"
-cd "$PROJECT_ROOT/src-tauri"
-cargo build --release 2>&1 | tail -5
+run_cargo_build release 5
 BINARY="$PROJECT_ROOT/src-tauri/target/release/sprite-anime"
 if [ -f "$BINARY" ]; then
     SIZE=$(du -h "$BINARY" | cut -f1)
@@ -57,7 +46,15 @@ fi
 # ---- Tauri Bundle ----
 step "打包 Tauri 安装包"
 cd "$PROJECT_ROOT"
-npx tauri build --bundles deb,rpm 2>&1 | grep -E "(Bundling|Finished|error|Bundle)" | tail -10 || true
+mkdir -p "$PROJECT_ROOT/logs"
+rm -rf "$BUILD_DIR"
+TAURI_BUILD_LOG="$PROJECT_ROOT/logs/tauri-build.log"
+if npx tauri build --bundles deb,rpm 2>&1 | tee "$TAURI_BUILD_LOG"; then
+    grep -E "(Bundling|Finished|error|Bundle)" "$TAURI_BUILD_LOG" | tail -10 || true
+else
+    error "Tauri 打包失败，详见 logs/tauri-build.log"
+    exit 1
+fi
 
 # ---- 收集产物 ----
 step "收集构建产物"

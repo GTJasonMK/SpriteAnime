@@ -1,69 +1,15 @@
 /// <reference lib="webworker" />
 
-export {};
-
-type BackgroundMode = "edge" | "firstFrame" | "none";
-
-interface PixelBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-interface WorkerFrameInput {
-  base64: string;
-  time: number;
-}
-
-interface WorkerOptions {
-  cols: number;
-  maxFrameEdge: number;
-  padding: number;
-  threshold: number;
-  bgMode: BackgroundMode;
-  autoTrim: boolean;
-  transparent: boolean;
-  cropRegion: PixelBounds;
-}
-
-interface ProcessMessage {
-  id: number;
-  frames: WorkerFrameInput[];
-  options: WorkerOptions;
-}
-
-interface ProcessedFramePayload {
-  blob: Blob;
-  time: number;
-  width: number;
-  height: number;
-}
-
-interface WorkerProgress {
-  id: number;
-  type: "progress";
-  done: number;
-  total: number;
-  message: string;
-}
-
-interface WorkerSuccess {
-  id: number;
-  type: "success";
-  frames: ProcessedFramePayload[];
-  sheetBlob: Blob;
-  sheetWidth: number;
-  sheetHeight: number;
-  cellWidth: number;
-  cellHeight: number;
-}
-
-interface WorkerFailure {
-  id: number;
-  type: "error";
-  error: string;
-}
+import type {
+  PixelBounds,
+  VideoSpriteWorkerErrorMessage as WorkerFailure,
+  VideoSpriteWorkerOptions as WorkerOptions,
+  VideoSpriteWorkerProgressMessage as WorkerProgress,
+  VideoSpriteWorkerRequest as ProcessMessage,
+  VideoSpriteWorkerSuccessMessage as WorkerSuccess,
+} from "./video-sprite-types";
+import { loadBitmapFromBase64 } from "../utils/bitmap";
+import { clampPixelBounds, expandPixelBounds } from "./video-sprite-utils";
 
 interface ProcessedFrameInternal {
   canvas: OffscreenCanvas;
@@ -142,11 +88,9 @@ function postProgress(id: number, done: number, total: number, message: string):
 }
 
 async function decodeFrameImageData(base64: string, cropRegion: PixelBounds): Promise<ImageData> {
-  const response = await fetch(`data:image/png;base64,${base64}`);
-  const blob = await response.blob();
-  const bitmap = await createImageBitmap(blob);
+  const bitmap = await loadBitmapFromBase64(base64);
   try {
-    const crop = clampCropRegion(cropRegion, bitmap.width, bitmap.height);
+    const crop = clampPixelBounds(cropRegion, bitmap.width, bitmap.height);
     const canvas = new OffscreenCanvas(crop.width, crop.height);
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) {
@@ -183,7 +127,7 @@ function buildExtractedFrame(
   const detected = options.autoTrim && options.bgMode !== "none"
     ? foreground?.bounds || detectForegroundBounds(imageData, firstFrameData, bgRgb, options)
     : null;
-  const crop = expandBounds(
+  const crop = expandPixelBounds(
     detected || {
       x: 0,
       y: 0,
@@ -446,35 +390,4 @@ function estimateEdgeBackgroundRgb(imageData: ImageData): [number, number, numbe
     Math.round(g / count),
     Math.round(b / count),
   ];
-}
-
-function expandBounds(
-  bounds: PixelBounds,
-  padding: number,
-  imageWidth: number,
-  imageHeight: number
-): PixelBounds {
-  const x = Math.max(0, bounds.x - padding);
-  const y = Math.max(0, bounds.y - padding);
-  const right = Math.min(imageWidth, bounds.x + bounds.width + padding);
-  const bottom = Math.min(imageHeight, bounds.y + bounds.height + padding);
-  return {
-    x,
-    y,
-    width: Math.max(1, right - x),
-    height: Math.max(1, bottom - y),
-  };
-}
-
-function clampCropRegion(region: PixelBounds, width: number, height: number): PixelBounds {
-  const minWidth = Math.max(1, Math.min(width, Math.round(region.width)));
-  const minHeight = Math.max(1, Math.min(height, Math.round(region.height)));
-  const x = Math.max(0, Math.min(width - minWidth, Math.round(region.x)));
-  const y = Math.max(0, Math.min(height - minHeight, Math.round(region.y)));
-  return {
-    x,
-    y,
-    width: minWidth,
-    height: minHeight,
-  };
 }

@@ -1,43 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
+import { alphaAt, makePixels, setPixel } from "./pixel-test-helpers.mjs";
+import {
+  cleanupTempDir,
+  compileEsModule,
+  getRepoRoot,
+  pathToFileURL,
+  resetTempDir,
+  runTests,
+} from "./ts-test-helpers.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = path.join(tmpdir(), "spriteanime-matting-tests");
-const sourcePath = path.join(root, "src", "pages", "generator-matting.ts");
-const compiledPath = path.join(outDir, "generator-matting.js");
-
-rmSync(outDir, { recursive: true, force: true });
-mkdirSync(outDir, { recursive: true });
-const transpiled = ts.transpileModule(readFileSync(sourcePath, "utf8"), {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-    strict: true,
-  },
-  fileName: sourcePath,
-});
-writeFileSync(compiledPath, transpiled.outputText);
+const root = getRepoRoot(import.meta.url);
+const outDir = resetTempDir("spriteanime-matting-tests");
+const compiledPath = compileEsModule(
+  root,
+  outDir,
+  "src/pages/generator-matting.ts",
+  "generator-matting.js"
+);
 const matting = await import(pathToFileURL(compiledPath).href);
-
-function makePixels(width, height, rgba = [0, 0, 0, 0]) {
-  const data = new Uint8ClampedArray(width * height * 4);
-  for (let index = 0; index < width * height; index += 1) {
-    data.set(rgba, index * 4);
-  }
-  return data;
-}
-
-function setPixel(data, width, x, y, rgba) {
-  data.set(rgba, (y * width + x) * 4);
-}
-
-function alphaAt(data, width, x, y) {
-  return data[(y * width + x) * 4 + 3];
-}
 
 function testContainMappingHorizontalLetterbox() {
   const bounds = { left: 0, top: 0, width: 300, height: 200 };
@@ -159,12 +139,14 @@ function testNoSeedDoesNotMutateTransparentImage() {
   assert.deepEqual(Array.from(data), before);
 }
 
-testContainMappingHorizontalLetterbox();
-testContainMappingVerticalLetterbox();
-testEraseConnectedWhiteResidue();
-testTransparentClickFindsNearbyResidueSeed();
-testDiagonalResidueIsOneRegion();
-testNoSeedDoesNotMutateTransparentImage();
+runTests([
+  testContainMappingHorizontalLetterbox,
+  testContainMappingVerticalLetterbox,
+  testEraseConnectedWhiteResidue,
+  testTransparentClickFindsNearbyResidueSeed,
+  testDiagonalResidueIsOneRegion,
+  testNoSeedDoesNotMutateTransparentImage,
+]);
 
-rmSync(outDir, { recursive: true, force: true });
+cleanupTempDir(outDir);
 console.log("Matting algorithm tests passed.");

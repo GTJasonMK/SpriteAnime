@@ -1,19 +1,33 @@
-use reqwest::Client;
+use base64::Engine;
+use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// API基础URL（可通过配置修改）
 pub const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:8000/v1";
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(360);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const API_CHECK_TIMEOUT: Duration = Duration::from_secs(25);
+const VIDEO_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const VIDEO_POLL_TIMEOUT: Duration = Duration::from_secs(900);
 const USER_AGENT: &str = "SpriteAnimte/0.1";
 
 struct ApiHttpClient {
     label: String,
     client: Client,
+}
+
+struct ApiResponseBody {
+    content_type: String,
+    body: String,
+}
+
+struct VideoJobInfo {
+    id: String,
+    status: String,
+    error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +108,130 @@ fn build_direct_client() -> Result<Client, String> {
         .tcp_keepalive(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("创建HTTP客户端失败: {}", e))
+}
+
+async fn send_authenticated_json_bytes(
+    api_client: &ApiHttpClient,
+    url: &str,
+    api_key: &str,
+    body: &[u8],
+    log_label: &str,
+    max_attempts: usize,
+) -> Result<reqwest::Response, String> {
+    for attempt in 1..=max_attempts.max(1) {
+        match api_client
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_vec())
+            .send()
+            .await
+        {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let msg = describe_send_error(&e);
+                if attempt < max_attempts && is_retryable_send_error(&e) {
+                    eprintln!("[api] {log_label} 请求失败，将重试一次: {msg}");
+                    continue;
+                }
+                eprintln!("[api] {log_label} 请求失败: {msg}");
+                return Err(msg);
+            }
+        }
+    }
+
+    Err(format!("{log_label} 请求未返回响应"))
+}
+
+async fn post_authenticated_json(
+    api_client: &ApiHttpClient,
+    url: &str,
+    api_key: &str,
+    body: &Value,
+    log_label: &str,
+) -> Result<ApiResponseBody, String> {
+    let resp = api_client
+        .client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = describe_send_error(&e);
+            eprintln!("[api] {log_label} 请求失败: {msg}");
+            msg
+        })?;
+
+    read_api_response_body(resp, log_label).await
+}
+
+async fn post_authenticated_multipart(
+    api_client: &ApiHttpClient,
+    url: &str,
+    api_key: &str,
+    form: multipart::Form,
+    log_label: &str,
+) -> Result<ApiResponseBody, String> {
+    let resp = api_client
+        .client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = describe_send_error(&e);
+            eprintln!("[api] {log_label} 请求失败: {msg}");
+            msg
+        })?;
+
+    read_api_response_body(resp, log_label).await
+}
+
+async fn get_authenticated(
+    api_client: &ApiHttpClient,
+    url: &str,
+    api_key: &str,
+    log_label: &str,
+) -> Result<ApiResponseBody, String> {
+    let resp = api_client
+        .client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = describe_send_error(&e);
+            eprintln!("[api] {log_label} 请求失败: {msg}");
+            msg
+        })?;
+
+    read_api_response_body(resp, log_label).await
+}
+
+async fn read_api_response_body(
+    resp: reqwest::Response,
+    log_label: &str,
+) -> Result<ApiResponseBody, String> {
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let msg = parse_http_error(status.as_u16(), &body);
+        eprintln!("[api] {log_label} {msg}");
+        return Err(msg);
+    }
+
+    Ok(ApiResponseBody { content_type, body })
 }
 
 fn describe_send_error(e: &reqwest::Error) -> String {
@@ -328,33 +466,15 @@ pub async fn call_responses_api(
 
     eprintln!("[api] /responses 尝试 {} (stream/sized)", api_client.label);
     let max_attempts = if input_image_data_url.is_some() { 1 } else { 2 };
-    let mut resp = None;
-    for attempt in 1..=max_attempts {
-        match api_client
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .body(body_bytes.clone())
-            .send()
-            .await
-        {
-            Ok(value) => {
-                resp = Some(value);
-                break;
-            }
-            Err(e) => {
-                let msg = describe_send_error(&e);
-                if attempt < max_attempts && is_retryable_send_error(&e) {
-                    eprintln!("[api] /responses 请求失败，将重试一次: {msg}");
-                    continue;
-                }
-                eprintln!("[api] /responses 请求失败: {msg}");
-                return Err(msg);
-            }
-        }
-    }
-    let resp = resp.ok_or_else(|| "Responses API 请求未返回响应".to_string())?;
+    let resp = send_authenticated_json_bytes(
+        &api_client,
+        &url,
+        api_key,
+        &body_bytes,
+        "/responses",
+        max_attempts,
+    )
+    .await?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -365,6 +485,470 @@ pub async fn call_responses_api(
     }
 
     read_responses_stream_images(resp, count).await
+}
+
+pub async fn call_chat_completions_image_api(
+    api_base: &str,
+    api_key: &str,
+    prompt: &str,
+    input_image_data_url: Option<&str>,
+    model: &str,
+    count: u32,
+    size: &str,
+    proxy_url: &str,
+) -> Result<Vec<String>, String> {
+    if api_key.is_empty() {
+        return Err("API Key为空".into());
+    }
+    if prompt.is_empty() {
+        return Err("提示词为空".into());
+    }
+
+    let url = endpoint_url(api_base, "chat/completions");
+    eprintln!(
+        "[api] /chat/completions 生图请求模型={model} size={size} count={count} input_image={}",
+        input_image_data_url.is_some()
+    );
+
+    let stream_body = build_chat_completions_image_generation_body(
+        model,
+        prompt,
+        input_image_data_url,
+        count,
+        size,
+        true,
+    );
+    let api_client = create_client(if proxy_url.is_empty() {
+        None
+    } else {
+        Some(proxy_url)
+    })?;
+
+    eprintln!(
+        "[api] /chat/completions 尝试 {} (image/stream)",
+        api_client.label
+    );
+    let response = match post_authenticated_json(
+        &api_client,
+        &url,
+        api_key,
+        &stream_body,
+        "/chat/completions 生图请求",
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) if should_retry_chat_image_without_generation_options(&err) => {
+            eprintln!(
+                "[api] /chat/completions 生图请求不接受 n/size 参数，使用最小流式请求体重试: {err}"
+            );
+            let minimal_body = build_minimal_chat_completions_image_generation_body(
+                model,
+                prompt,
+                input_image_data_url,
+                true,
+            );
+            match post_authenticated_json(
+                &api_client,
+                &url,
+                api_key,
+                &minimal_body,
+                "/chat/completions 生图请求",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(minimal_err) if should_retry_chat_image_without_stream(&minimal_err) => {
+                    eprintln!(
+                        "[api] /chat/completions 生图请求不支持 stream，使用最小非流式请求体重试: {minimal_err}"
+                    );
+                    let minimal_non_stream_body =
+                        build_minimal_chat_completions_image_generation_body(
+                            model,
+                            prompt,
+                            input_image_data_url,
+                            false,
+                        );
+                    post_authenticated_json(
+                        &api_client,
+                        &url,
+                        api_key,
+                        &minimal_non_stream_body,
+                        "/chat/completions 生图请求",
+                    )
+                    .await
+                    .map_err(|non_stream_err| {
+                        format!(
+                            "/chat/completions 生图请求失败：{err}；最小流式重试失败：{minimal_err}；最小非流式重试失败：{non_stream_err}"
+                        )
+                    })?
+                }
+                Err(minimal_err) => {
+                    return Err(format!(
+                        "/chat/completions 生图请求失败：{err}；最小流式请求体重试失败：{minimal_err}"
+                    ));
+                }
+            }
+        }
+        Err(err) if should_retry_chat_image_without_stream(&err) => {
+            eprintln!("[api] /chat/completions 生图请求不支持 stream，使用非流式请求体重试: {err}");
+            let non_stream_body = build_chat_completions_image_generation_body(
+                model,
+                prompt,
+                input_image_data_url,
+                count,
+                size,
+                false,
+            );
+            match post_authenticated_json(
+                &api_client,
+                &url,
+                api_key,
+                &non_stream_body,
+                "/chat/completions 生图请求",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(non_stream_err)
+                    if should_retry_chat_image_without_generation_options(&non_stream_err) =>
+                {
+                    eprintln!(
+                        "[api] /chat/completions 生图请求不接受 n/size 参数，使用最小非流式请求体重试: {non_stream_err}"
+                    );
+                    let minimal_non_stream_body =
+                        build_minimal_chat_completions_image_generation_body(
+                            model,
+                            prompt,
+                            input_image_data_url,
+                            false,
+                        );
+                    post_authenticated_json(
+                        &api_client,
+                        &url,
+                        api_key,
+                        &minimal_non_stream_body,
+                        "/chat/completions 生图请求",
+                    )
+                    .await
+                    .map_err(|minimal_err| {
+                        format!(
+                            "/chat/completions 生图请求失败：{err}；非流式重试失败：{non_stream_err}；最小非流式重试失败：{minimal_err}"
+                        )
+                    })?
+                }
+                Err(non_stream_err) => {
+                    return Err(format!(
+                        "/chat/completions 流式生图请求失败：{err}；非流式重试失败：{non_stream_err}"
+                    ));
+                }
+            }
+        }
+        Err(err) => return Err(err),
+    };
+
+    let image_refs = extract_images_from_chat_completions_response(&response.body);
+    if image_refs.is_empty() {
+        return Err(format!(
+            "Chat Completions API 未返回图片内容；响应预览: {}",
+            response_preview(&response.body)
+        ));
+    }
+
+    let mut images = Vec::new();
+    for image_ref in image_refs.into_iter().take(count as usize) {
+        let image =
+            materialize_image_reference_as_base64(&api_client, api_base, api_key, &image_ref)
+                .await?;
+        if !image.trim().is_empty() {
+            images.push(image);
+        }
+    }
+
+    let images = dedupe_images(images);
+    if images.is_empty() {
+        return Err("Chat Completions API 返回了图片引用，但内容为空".into());
+    }
+    Ok(images)
+}
+
+pub async fn call_chat_completions_video_api(
+    api_base: &str,
+    api_key: &str,
+    prompt: &str,
+    model: &str,
+    size: &str,
+    seconds: &str,
+    proxy_url: &str,
+) -> Result<Vec<u8>, String> {
+    let api_base = api_base.trim();
+    let api_key = api_key.trim();
+    let prompt = prompt.trim();
+    let model = model.trim();
+    let size = size.trim();
+    let seconds = seconds.trim();
+
+    if api_key.is_empty() {
+        return Err("API Key为空".into());
+    }
+    if api_base.is_empty() {
+        return Err("API 地址为空".into());
+    }
+    if prompt.is_empty() {
+        return Err("视频提示词为空".into());
+    }
+    if model.is_empty() {
+        return Err("视频模型为空".into());
+    }
+
+    let url = endpoint_url(api_base, "chat/completions");
+    let api_client = create_client(if proxy_url.trim().is_empty() {
+        None
+    } else {
+        Some(proxy_url.trim())
+    })?;
+    let stream_body =
+        build_chat_completions_video_generation_body(model, prompt, size, seconds, true, true);
+
+    eprintln!(
+        "[api] /chat/completions 视频请求 | 模型={model} size={size} seconds={seconds} mode={} stream=true",
+        api_client.label
+    );
+    let response = match post_authenticated_json(
+        &api_client,
+        &url,
+        api_key,
+        &stream_body,
+        "/chat/completions 视频请求",
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) if should_retry_chat_video_without_generation_options(&err) => {
+            eprintln!(
+                "[api] /chat/completions 视频请求不接受 size/seconds 参数，使用最小流式请求体重试: {err}"
+            );
+            let minimal_body = build_chat_completions_video_generation_body(
+                model, prompt, size, seconds, true, false,
+            );
+            match post_authenticated_json(
+                &api_client,
+                &url,
+                api_key,
+                &minimal_body,
+                "/chat/completions 视频请求",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(minimal_err) if should_retry_chat_image_without_stream(&minimal_err) => {
+                    eprintln!(
+                        "[api] /chat/completions 视频请求不支持 stream，使用最小非流式请求体重试: {minimal_err}"
+                    );
+                    let minimal_non_stream_body = build_chat_completions_video_generation_body(
+                        model, prompt, size, seconds, false, false,
+                    );
+                    post_authenticated_json(
+                        &api_client,
+                        &url,
+                        api_key,
+                        &minimal_non_stream_body,
+                        "/chat/completions 视频请求",
+                    )
+                    .await
+                    .map_err(|non_stream_err| {
+                        format!(
+                            "/chat/completions 视频请求失败：{err}；最小流式重试失败：{minimal_err}；最小非流式重试失败：{non_stream_err}"
+                        )
+                    })?
+                }
+                Err(minimal_err) => {
+                    return Err(format!(
+                        "/chat/completions 视频请求失败：{err}；最小流式请求体重试失败：{minimal_err}"
+                    ));
+                }
+            }
+        }
+        Err(err) if should_retry_chat_image_without_stream(&err) => {
+            eprintln!("[api] /chat/completions 视频请求不支持 stream，使用非流式请求体重试: {err}");
+            let non_stream_body = build_chat_completions_video_generation_body(
+                model, prompt, size, seconds, false, true,
+            );
+            match post_authenticated_json(
+                &api_client,
+                &url,
+                api_key,
+                &non_stream_body,
+                "/chat/completions 视频请求",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(non_stream_err)
+                    if should_retry_chat_video_without_generation_options(&non_stream_err) =>
+                {
+                    eprintln!(
+                        "[api] /chat/completions 视频请求不接受 size/seconds 参数，使用最小非流式请求体重试: {non_stream_err}"
+                    );
+                    let minimal_non_stream_body = build_chat_completions_video_generation_body(
+                        model, prompt, size, seconds, false, false,
+                    );
+                    post_authenticated_json(
+                        &api_client,
+                        &url,
+                        api_key,
+                        &minimal_non_stream_body,
+                        "/chat/completions 视频请求",
+                    )
+                    .await
+                    .map_err(|minimal_err| {
+                        format!(
+                            "/chat/completions 视频请求失败：{err}；非流式重试失败：{non_stream_err}；最小非流式重试失败：{minimal_err}"
+                        )
+                    })?
+                }
+                Err(non_stream_err) => {
+                    return Err(format!(
+                        "/chat/completions 流式视频请求失败：{err}；非流式重试失败：{non_stream_err}"
+                    ));
+                }
+            }
+        }
+        Err(err) => return Err(err),
+    };
+
+    let video_refs = extract_videos_from_chat_completions_response(&response.body);
+    if video_refs.is_empty() {
+        return Err(format!(
+            "Chat Completions API 未返回视频内容；响应预览: {}",
+            response_preview(&response.body)
+        ));
+    }
+
+    materialize_video_reference_as_bytes(&api_client, api_base, api_key, &video_refs[0]).await
+}
+
+pub async fn call_videos_api(
+    api_base: &str,
+    api_key: &str,
+    prompt: &str,
+    model: &str,
+    size: &str,
+    seconds: &str,
+    proxy_url: &str,
+) -> Result<Vec<u8>, String> {
+    let api_base = api_base.trim();
+    let api_key = api_key.trim();
+    let prompt = prompt.trim();
+    let model = model.trim();
+    let size = size.trim();
+    let seconds = seconds.trim();
+
+    if api_key.is_empty() {
+        return Err("API Key为空".into());
+    }
+    if api_base.is_empty() {
+        return Err("API 地址为空".into());
+    }
+    if prompt.is_empty() {
+        return Err("视频提示词为空".into());
+    }
+    if model.is_empty() {
+        return Err("视频模型为空".into());
+    }
+
+    let url = endpoint_url(api_base, "videos");
+    let api_client = create_client(if proxy_url.trim().is_empty() {
+        None
+    } else {
+        Some(proxy_url.trim())
+    })?;
+    let form = build_videos_generation_form(model, prompt, size, seconds);
+    let json_body = build_videos_generation_body(model, prompt, size, seconds);
+
+    eprintln!(
+        "[api] /videos 视频请求 | 模型={model} size={size} seconds={seconds} mode={}",
+        api_client.label
+    );
+    let created =
+        match post_authenticated_multipart(&api_client, &url, api_key, form, "/videos 视频请求")
+            .await
+        {
+            Ok(response) => response,
+            Err(multipart_err) if should_retry_videos_with_json(&multipart_err) => {
+                eprintln!(
+                    "[api] /videos multipart 请求失败，使用 JSON 请求体重试: {multipart_err}"
+                );
+                post_authenticated_json(&api_client, &url, api_key, &json_body, "/videos 视频请求")
+                    .await
+                    .map_err(|json_err| {
+                        format!(
+                        "/videos multipart 请求失败：{multipart_err}；JSON 重试失败：{json_err}"
+                    )
+                    })?
+            }
+            Err(err) => return Err(err),
+        };
+
+    let direct_refs = extract_videos_from_video_api_response(&created.body);
+    if let Some(video_ref) = direct_refs.first() {
+        return materialize_video_reference_as_bytes(&api_client, api_base, api_key, video_ref)
+            .await;
+    }
+
+    let mut job = parse_video_job_info(&created.body).ok_or_else(|| {
+        format!(
+            "Videos API 未返回视频任务 ID；响应预览: {}",
+            response_preview(&created.body)
+        )
+    })?;
+    eprintln!(
+        "[api] /videos 已创建任务 id={} status={}",
+        job.id, job.status
+    );
+
+    let started = Instant::now();
+    loop {
+        if is_video_job_completed(&job.status) {
+            return download_video_content_by_id(&api_client, api_base, api_key, &job.id).await;
+        }
+        if is_video_job_failed(&job.status) {
+            return Err(format!(
+                "Videos API 任务失败: id={} status={}{}",
+                job.id,
+                job.status,
+                job.error_message
+                    .as_deref()
+                    .map(|message| format!(" message={message}"))
+                    .unwrap_or_default()
+            ));
+        }
+        if started.elapsed() > VIDEO_POLL_TIMEOUT {
+            return Err(format!(
+                "Videos API 任务超时: id={} status={}，已等待 {} 秒",
+                job.id,
+                job.status,
+                VIDEO_POLL_TIMEOUT.as_secs()
+            ));
+        }
+
+        tokio::time::sleep(VIDEO_POLL_INTERVAL).await;
+        let status_url = endpoint_url(api_base, &format!("videos/{}", job.id));
+        let status_response =
+            get_authenticated(&api_client, &status_url, api_key, "/videos 任务状态").await?;
+        let direct_refs = extract_videos_from_video_api_response(&status_response.body);
+        if let Some(video_ref) = direct_refs.first() {
+            return materialize_video_reference_as_bytes(&api_client, api_base, api_key, video_ref)
+                .await;
+        }
+        job = parse_video_job_info(&status_response.body).ok_or_else(|| {
+            format!(
+                "Videos API 状态响应无法解析；响应预览: {}",
+                response_preview(&status_response.body)
+            )
+        })?;
+        eprintln!("[api] /videos 任务状态 id={} status={}", job.id, job.status);
+    }
 }
 
 fn build_responses_image_generation_body(
@@ -395,6 +979,166 @@ fn build_responses_image_generation_body(
         "tools": [{"type": "image_generation", "size": size, "n": count}],
         "stream": stream,
     })
+}
+
+fn build_chat_completions_image_generation_body(
+    model: &str,
+    prompt: &str,
+    input_image_data_url: Option<&str>,
+    count: u32,
+    size: &str,
+    stream: bool,
+) -> Value {
+    let user_content =
+        if let Some(image_url) = input_image_data_url.filter(|value| !value.trim().is_empty()) {
+            serde_json::json!([
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ])
+        } else {
+            Value::String(prompt.to_string())
+        };
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": user_content}
+        ],
+        "n": count,
+        "size": size,
+    });
+    if stream {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("stream".into(), Value::Bool(true));
+        }
+    }
+    body
+}
+
+fn build_minimal_chat_completions_image_generation_body(
+    model: &str,
+    prompt: &str,
+    input_image_data_url: Option<&str>,
+    stream: bool,
+) -> Value {
+    let user_content =
+        if let Some(image_url) = input_image_data_url.filter(|value| !value.trim().is_empty()) {
+            serde_json::json!([
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}}
+            ])
+        } else {
+            Value::String(prompt.to_string())
+        };
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": user_content}
+        ],
+    });
+    if stream {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("stream".into(), Value::Bool(true));
+        }
+    }
+    body
+}
+
+fn build_chat_completions_video_generation_body(
+    model: &str,
+    prompt: &str,
+    size: &str,
+    seconds: &str,
+    stream: bool,
+    include_generation_options: bool,
+) -> Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+    });
+    if let Some(map) = body.as_object_mut() {
+        if stream {
+            map.insert("stream".into(), Value::Bool(true));
+        }
+        if include_generation_options {
+            map.insert("size".into(), Value::String(size.to_string()));
+            map.insert("seconds".into(), Value::String(seconds.to_string()));
+        }
+    }
+    body
+}
+
+fn build_videos_generation_form(
+    model: &str,
+    prompt: &str,
+    size: &str,
+    seconds: &str,
+) -> multipart::Form {
+    multipart::Form::new()
+        .text("model", model.to_string())
+        .text("prompt", prompt.to_string())
+        .text("size", size.to_string())
+        .text("seconds", seconds.to_string())
+}
+
+fn build_videos_generation_body(model: &str, prompt: &str, size: &str, seconds: &str) -> Value {
+    serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "seconds": seconds,
+    })
+}
+
+fn should_retry_chat_image_without_generation_options(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    (lower.contains("unknown parameter")
+        || lower.contains("unrecognized request argument")
+        || lower.contains("unsupported parameter")
+        || lower.contains("extra fields")
+        || lower.contains("not permitted")
+        || lower.contains("invalid field"))
+        && (lower.contains("size") || lower.contains("\"n\"") || lower.contains("'n'"))
+}
+
+fn should_retry_chat_image_without_stream(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    (lower.contains("unknown parameter")
+        || lower.contains("unrecognized request argument")
+        || lower.contains("unsupported parameter")
+        || lower.contains("extra fields")
+        || lower.contains("not permitted")
+        || lower.contains("invalid field")
+        || lower.contains("streaming is not supported")
+        || lower.contains("stream is not supported"))
+        && lower.contains("stream")
+}
+
+fn should_retry_chat_video_without_generation_options(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    (lower.contains("unknown parameter")
+        || lower.contains("unrecognized request argument")
+        || lower.contains("unsupported parameter")
+        || lower.contains("extra fields")
+        || lower.contains("not permitted")
+        || lower.contains("invalid field"))
+        && (lower.contains("size")
+            || lower.contains("seconds")
+            || lower.contains("duration")
+            || lower.contains("video"))
+}
+
+fn should_retry_videos_with_json(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("multipart")
+        || lower.contains("content-type")
+        || lower.contains("content type")
+        || lower.contains("form")
+        || lower.contains("json")
+        || lower.contains("invalid request body")
 }
 
 /// POST /responses — 文本请求，用于提示词优化。
@@ -552,35 +1296,10 @@ async fn send_responses_text_request(
         "[api] /responses 尝试 {} (normal/text input={input_shape})",
         api_client.label
     );
-    let resp = api_client
-        .client
-        .post(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            let msg = describe_send_error(&e);
-            eprintln!("[api] /responses 文本请求失败: {msg}");
-            msg
-        })?;
+    let response =
+        post_authenticated_json(api_client, url, api_key, body, "/responses 文本请求").await?;
 
-    let status = resp.status();
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let resp_body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        let msg = parse_http_error(status.as_u16(), &resp_body);
-        eprintln!("[api] /responses 文本请求 {msg}");
-        return Err(msg);
-    }
-
-    parse_text_api_response("Responses API", &resp_body, &content_type)
+    parse_text_api_response("Responses API", &response.body, &response.content_type)
 }
 
 fn should_retry_responses_text_list_input(err: &str) -> bool {
@@ -650,35 +1369,20 @@ async fn call_chat_completions_text_api(
         "[api] /chat/completions 尝试 {} (normal/text)",
         api_client.label
     );
-    let resp = api_client
-        .client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| {
-            let msg = describe_send_error(&e);
-            eprintln!("[api] /chat/completions 文本请求失败: {msg}");
-            msg
-        })?;
+    let response = post_authenticated_json(
+        &api_client,
+        &url,
+        api_key,
+        &body,
+        "/chat/completions 文本请求",
+    )
+    .await?;
 
-    let status = resp.status();
-    let content_type = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let resp_body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        let msg = parse_http_error(status.as_u16(), &resp_body);
-        eprintln!("[api] /chat/completions 文本请求 {msg}");
-        return Err(msg);
-    }
-
-    parse_text_api_response("Chat Completions API", &resp_body, &content_type)
+    parse_text_api_response(
+        "Chat Completions API",
+        &response.body,
+        &response.content_type,
+    )
 }
 
 fn should_use_chat_completions(api_base: &str, model: &str) -> bool {
@@ -1051,6 +1755,680 @@ fn normalize_image_base64(value: &str) -> String {
     value.to_string()
 }
 
+fn normalize_video_base64(value: &str) -> String {
+    if value.starts_with("data:video/") {
+        if let Some(comma_pos) = value.find("base64,") {
+            return value[comma_pos + 7..].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn extract_images_from_chat_completions_response(body: &str) -> Vec<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut images = Vec::new();
+    if looks_like_sse_body(trimmed) {
+        for payload in sse_data_payloads(trimmed) {
+            if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+                collect_chat_completion_images(&value, &mut images);
+            } else {
+                collect_image_refs_from_text(&payload, &mut images);
+            }
+        }
+    } else if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        collect_chat_completion_images(&value, &mut images);
+    } else {
+        collect_image_refs_from_text(trimmed, &mut images);
+    }
+
+    dedupe_images(images)
+}
+
+fn extract_videos_from_chat_completions_response(body: &str) -> Vec<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut videos = Vec::new();
+    if looks_like_sse_body(trimmed) {
+        for payload in sse_data_payloads(trimmed) {
+            if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+                collect_chat_completion_videos(&value, &mut videos);
+            } else {
+                collect_video_refs_from_text(&payload, &mut videos);
+            }
+        }
+    } else if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        collect_chat_completion_videos(&value, &mut videos);
+    } else {
+        collect_video_refs_from_text(trimmed, &mut videos);
+    }
+
+    dedupe_images(videos)
+}
+
+fn extract_videos_from_video_api_response(body: &str) -> Vec<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut videos = Vec::new();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        collect_chat_completion_videos(&value, &mut videos);
+        for key in ["url", "download_url", "output_url", "content_url"] {
+            if let Some(url) = value.get(key).and_then(Value::as_str) {
+                if looks_like_video_ref(url) || looks_like_http_url(url) {
+                    videos.push(normalize_video_base64(url));
+                }
+            }
+        }
+    } else {
+        collect_video_refs_from_text(trimmed, &mut videos);
+    }
+
+    dedupe_images(videos)
+}
+
+fn parse_video_job_info(body: &str) -> Option<VideoJobInfo> {
+    let value = serde_json::from_str::<Value>(body.trim()).ok()?;
+    let id = find_string_for_keys(&value, &["id", "video_id", "videoId"])?;
+    let status = find_string_for_keys(&value, &["status", "state"])
+        .unwrap_or_else(|| "completed".to_string());
+    let error_message = find_string_for_keys(
+        &value,
+        &[
+            "message",
+            "error_message",
+            "failure_reason",
+            "failed_reason",
+        ],
+    )
+    .or_else(|| {
+        value
+            .get("error")
+            .and_then(|error| find_string_for_keys(error, &["message", "code"]))
+    });
+
+    Some(VideoJobInfo {
+        id,
+        status,
+        error_message,
+    })
+}
+
+fn find_string_for_keys(value: &Value, keys: &[&str]) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key).and_then(Value::as_str) {
+                    let trimmed = found.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+            for key in ["data", "result", "video", "output"] {
+                if let Some(child) = map.get(key) {
+                    if let Some(found) = find_string_for_keys(child, keys) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| find_string_for_keys(item, keys)),
+        _ => None,
+    }
+}
+
+fn is_video_job_completed(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "completed" | "complete" | "succeeded" | "success" | "done" | "finished"
+    )
+}
+
+fn is_video_job_failed(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "failed" | "failure" | "cancelled" | "canceled" | "expired" | "error"
+    )
+}
+
+fn collect_chat_completion_images(value: &Value, images: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_chat_completion_images(item, images);
+            }
+        }
+        Value::Object(map) => {
+            let type_name = map.get("type").and_then(Value::as_str).unwrap_or_default();
+
+            for key in ["b64_json", "image_base64", "base64"] {
+                if let Some(image) = map.get(key).and_then(Value::as_str) {
+                    images.push(normalize_image_base64(image));
+                }
+            }
+
+            if type_name == "image_url" {
+                if let Some(image_url) = map.get("image_url") {
+                    collect_image_url_value(image_url, images);
+                }
+                if let Some(url) = map.get("url").and_then(Value::as_str) {
+                    images.push(normalize_image_base64(url));
+                }
+            }
+
+            if let Some(image_url) = map.get("image_url") {
+                collect_image_url_value(image_url, images);
+            }
+            if let Some(image) = map.get("image") {
+                collect_image_url_value(image, images);
+            }
+
+            if let Some(content) = map.get("content") {
+                match content {
+                    Value::String(text) => collect_image_refs_from_text(text, images),
+                    _ => collect_chat_completion_images(content, images),
+                }
+            }
+
+            for key in ["data", "output", "result", "choices", "message", "delta"] {
+                if let Some(child) = map.get(key) {
+                    collect_chat_completion_images(child, images);
+                }
+            }
+        }
+        Value::String(text) => collect_image_refs_from_text(text, images),
+        _ => {}
+    }
+}
+
+fn collect_chat_completion_videos(value: &Value, videos: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_chat_completion_videos(item, videos);
+            }
+        }
+        Value::Object(map) => {
+            let type_name = map.get("type").and_then(Value::as_str).unwrap_or_default();
+            let is_video_context = type_name.contains("video")
+                || map.contains_key("video")
+                || map.contains_key("videos")
+                || map.contains_key("video_url")
+                || map.contains_key("videoUrl")
+                || map.contains_key("video_base64");
+
+            for key in ["b64_json", "video_base64", "base64"] {
+                if let Some(video) = map.get(key).and_then(Value::as_str) {
+                    videos.push(normalize_video_base64(video));
+                }
+            }
+
+            for key in [
+                "video_url",
+                "videoUrl",
+                "download_url",
+                "downloadUrl",
+                "file_url",
+                "fileUrl",
+                "output_url",
+                "outputUrl",
+                "content_url",
+                "contentUrl",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_video_url_value(child, videos);
+                }
+            }
+
+            if is_video_context {
+                if let Some(url) = map.get("url").and_then(Value::as_str) {
+                    if looks_like_video_ref(url) || looks_like_http_url(url) {
+                        videos.push(normalize_video_base64(url));
+                    }
+                }
+            }
+
+            if let Some(content) = map.get("content") {
+                match content {
+                    Value::String(text) => collect_video_refs_from_text(text, videos),
+                    _ => collect_chat_completion_videos(content, videos),
+                }
+            }
+
+            for key in [
+                "data", "output", "result", "choices", "message", "delta", "video", "videos",
+                "file", "files",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_chat_completion_videos(child, videos);
+                }
+            }
+        }
+        Value::String(text) => collect_video_refs_from_text(text, videos),
+        _ => {}
+    }
+}
+
+fn collect_image_url_value(value: &Value, images: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if looks_like_image_ref(text) {
+                images.push(normalize_image_base64(text));
+            } else {
+                collect_image_refs_from_text(text, images);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(url) = map.get("url").and_then(Value::as_str) {
+                images.push(normalize_image_base64(url));
+            }
+            if let Some(b64) = map.get("b64_json").and_then(Value::as_str) {
+                images.push(normalize_image_base64(b64));
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_image_url_value(item, images);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_video_url_value(value: &Value, videos: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if looks_like_video_ref(text) {
+                videos.push(normalize_video_base64(text));
+            } else {
+                collect_video_refs_from_text(text, videos);
+            }
+        }
+        Value::Object(map) => {
+            for key in ["url", "download_url", "downloadUrl"] {
+                if let Some(url) = map.get(key).and_then(Value::as_str) {
+                    videos.push(normalize_video_base64(url));
+                }
+            }
+            for key in ["b64_json", "video_base64", "base64"] {
+                if let Some(b64) = map.get(key).and_then(Value::as_str) {
+                    videos.push(normalize_video_base64(b64));
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_video_url_value(item, videos);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_image_refs_from_text(text: &str, images: &mut Vec<String>) {
+    let trimmed = trim_markdown_code_fence(text.trim());
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        collect_chat_completion_images(&value, images);
+        return;
+    }
+
+    if looks_like_image_ref(trimmed) {
+        images.push(normalize_image_base64(trimmed));
+    }
+
+    for data_url in extract_data_image_urls(trimmed) {
+        images.push(normalize_image_base64(&data_url));
+    }
+    for url in extract_http_urls(trimmed) {
+        if looks_like_image_url_or_signed_url(&url, trimmed) {
+            images.push(url);
+        }
+    }
+}
+
+fn collect_video_refs_from_text(text: &str, videos: &mut Vec<String>) {
+    let trimmed = trim_markdown_code_fence(text.trim());
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        collect_chat_completion_videos(&value, videos);
+        return;
+    }
+
+    if looks_like_video_ref(trimmed) {
+        videos.push(normalize_video_base64(trimmed));
+    }
+
+    for data_url in extract_data_video_urls(trimmed) {
+        videos.push(normalize_video_base64(&data_url));
+    }
+    for url in extract_http_urls(trimmed) {
+        if looks_like_video_url_or_signed_url(&url, trimmed) {
+            videos.push(url);
+        }
+    }
+}
+
+fn trim_markdown_code_fence(value: &str) -> &str {
+    let value = value.trim();
+    if !value.starts_with("```") {
+        return value;
+    }
+    let Some(first_newline) = value.find('\n') else {
+        return value;
+    };
+    let body = &value[first_newline + 1..];
+    body.trim_end_matches("```").trim()
+}
+
+fn extract_data_image_urls(value: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("data:image/") {
+        let candidate = &rest[start..];
+        let end = candidate
+            .find(|ch: char| {
+                ch.is_whitespace() || ch == '"' || ch == '\'' || ch == ')' || ch == ']'
+            })
+            .unwrap_or(candidate.len());
+        urls.push(
+            candidate[..end]
+                .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';'))
+                .to_string(),
+        );
+        rest = &candidate[end..];
+    }
+    urls
+}
+
+fn extract_data_video_urls(value: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("data:video/") {
+        let candidate = &rest[start..];
+        let end = candidate
+            .find(|ch: char| {
+                ch.is_whitespace() || ch == '"' || ch == '\'' || ch == ')' || ch == ']'
+            })
+            .unwrap_or(candidate.len());
+        urls.push(
+            candidate[..end]
+                .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';'))
+                .to_string(),
+        );
+        rest = &candidate[end..];
+    }
+    urls
+}
+
+fn extract_http_urls(value: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for marker in ["http://", "https://"] {
+        let mut rest = value;
+        while let Some(start) = rest.find(marker) {
+            let candidate = &rest[start..];
+            let end = candidate
+                .find(|ch: char| {
+                    ch.is_whitespace() || ch == '"' || ch == '\'' || ch == ')' || ch == ']'
+                })
+                .unwrap_or(candidate.len());
+            urls.push(
+                candidate[..end]
+                    .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';' | ':'))
+                    .to_string(),
+            );
+            rest = &candidate[end..];
+        }
+    }
+    urls
+}
+
+fn looks_like_image_ref(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("data:image/")
+        || looks_like_http_url(trimmed)
+        || looks_like_base64_image_payload(trimmed)
+}
+
+fn looks_like_video_ref(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("data:video/")
+        || looks_like_video_url(trimmed)
+        || looks_like_base64_video_payload(trimmed)
+}
+
+fn looks_like_http_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+fn looks_like_video_url(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    looks_like_http_url(&lower)
+        && (lower.contains(".mp4")
+            || lower.contains(".webm")
+            || lower.contains(".mov")
+            || lower.contains(".m4v")
+            || lower.contains(".mpeg")
+            || lower.contains(".mpg"))
+}
+
+fn looks_like_image_url_or_signed_url(url: &str, surrounding_text: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains(".png")
+        || lower.contains(".jpg")
+        || lower.contains(".jpeg")
+        || lower.contains(".webp")
+        || lower.contains(".gif")
+    {
+        return true;
+    }
+    let trimmed = surrounding_text.trim();
+    trimmed == url || trimmed.contains("image_url") || trimmed.contains("b64_json")
+}
+
+fn looks_like_video_url_or_signed_url(url: &str, surrounding_text: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains(".mp4")
+        || lower.contains(".webm")
+        || lower.contains(".mov")
+        || lower.contains(".m4v")
+        || lower.contains(".mpeg")
+        || lower.contains(".mpg")
+    {
+        return true;
+    }
+    let trimmed = surrounding_text.trim();
+    trimmed == url
+        || trimmed.contains("video_url")
+        || trimmed.contains("videoUrl")
+        || trimmed.contains("download_url")
+        || trimmed.contains("downloadUrl")
+}
+
+fn looks_like_base64_image_payload(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() >= 128
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
+}
+
+fn looks_like_base64_video_payload(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() >= 512
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
+}
+
+async fn materialize_image_reference_as_base64(
+    api_client: &ApiHttpClient,
+    api_base: &str,
+    api_key: &str,
+    image_ref: &str,
+) -> Result<String, String> {
+    let image_ref = image_ref.trim();
+    if image_ref.is_empty() {
+        return Ok(String::new());
+    }
+    if looks_like_http_url(image_ref) {
+        return download_image_url_as_base64(api_client, api_base, api_key, image_ref).await;
+    }
+    Ok(normalize_image_base64(image_ref))
+}
+
+async fn materialize_video_reference_as_bytes(
+    api_client: &ApiHttpClient,
+    api_base: &str,
+    api_key: &str,
+    video_ref: &str,
+) -> Result<Vec<u8>, String> {
+    let video_ref = video_ref.trim();
+    if video_ref.is_empty() {
+        return Err("Chat Completions API 返回了空视频引用".into());
+    }
+    if looks_like_http_url(video_ref) {
+        return download_video_url_as_bytes(api_client, api_base, api_key, video_ref).await;
+    }
+
+    let base64_payload = normalize_video_base64(video_ref);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_payload.trim())
+        .map_err(|e| format!("解析视频 base64 失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("Chat Completions API 返回的视频内容为空".into());
+    }
+    Ok(bytes)
+}
+
+async fn download_image_url_as_base64(
+    api_client: &ApiHttpClient,
+    api_base: &str,
+    api_key: &str,
+    url: &str,
+) -> Result<String, String> {
+    eprintln!("[api] 下载 /chat/completions 返回的图片 URL");
+    let mut request = api_client.client.get(url).header("Accept", "image/*,*/*");
+    if should_authenticate_image_download(api_base, url) {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let resp = request.send().await.map_err(|e| {
+        let msg = describe_send_error(&e);
+        eprintln!("[api] 下载图片 URL 失败: {msg}");
+        msg
+    })?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(parse_http_error(status.as_u16(), &body));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取图片 URL 内容失败: {}", describe_send_error(&e)))?;
+    if bytes.is_empty() {
+        return Err("图片 URL 下载成功但内容为空".into());
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+async fn download_video_url_as_bytes(
+    api_client: &ApiHttpClient,
+    api_base: &str,
+    api_key: &str,
+    url: &str,
+) -> Result<Vec<u8>, String> {
+    eprintln!("[api] 下载 /chat/completions 返回的视频 URL");
+    let mut request = api_client.client.get(url).header("Accept", "video/*,*/*");
+    if should_authenticate_image_download(api_base, url) {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let resp = request.send().await.map_err(|e| {
+        let msg = describe_send_error(&e);
+        eprintln!("[api] 下载视频 URL 失败: {msg}");
+        msg
+    })?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(parse_http_error(status.as_u16(), &body));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取视频 URL 内容失败: {}", describe_send_error(&e)))?;
+    if bytes.is_empty() {
+        return Err("视频 URL 下载成功但内容为空".into());
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn download_video_content_by_id(
+    api_client: &ApiHttpClient,
+    api_base: &str,
+    api_key: &str,
+    video_id: &str,
+) -> Result<Vec<u8>, String> {
+    let url = endpoint_url(api_base, &format!("videos/{video_id}/content"));
+    eprintln!("[api] 下载 /videos 生成内容 id={video_id}");
+    let resp = api_client
+        .client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "video/*,*/*")
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = describe_send_error(&e);
+            eprintln!("[api] 下载 /videos 内容失败: {msg}");
+            msg
+        })?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(parse_http_error(status.as_u16(), &body));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 /videos 内容失败: {}", describe_send_error(&e)))?;
+    if bytes.is_empty() {
+        return Err("Videos API 内容下载成功但为空".into());
+    }
+    Ok(bytes.to_vec())
+}
+
+fn should_authenticate_image_download(api_base: &str, url: &str) -> bool {
+    let Ok(base) = reqwest::Url::parse(api_base) else {
+        return false;
+    };
+    let Ok(target) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    base.scheme() == target.scheme()
+        && base.host_str() == target.host_str()
+        && base.port_or_known_default() == target.port_or_known_default()
+}
+
 fn sse_data_payloads(raw: &str) -> Vec<String> {
     let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
     let mut payloads = Vec::new();
@@ -1362,6 +2740,148 @@ mod tests {
     }
 
     #[test]
+    fn chat_image_body_uses_chat_completions_shape() {
+        let body = build_chat_completions_image_generation_body(
+            "model-a",
+            "draw a sprite",
+            None,
+            2,
+            "1024x1024",
+            true,
+        );
+
+        assert_eq!(body["model"], "model-a");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "draw a sprite");
+        assert_eq!(body["n"], 2);
+        assert_eq!(body["size"], "1024x1024");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn chat_image_body_can_include_reference_image() {
+        let image = "data:image/png;base64,abc";
+        let body = build_chat_completions_image_generation_body(
+            "model-a",
+            "redraw this icon",
+            Some(image),
+            1,
+            "1024x1024",
+            true,
+        );
+
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(
+            body["messages"][0]["content"][0]["text"],
+            "redraw this icon"
+        );
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(body["messages"][0]["content"][1]["image_url"]["url"], image);
+    }
+
+    #[test]
+    fn chat_image_parser_extracts_direct_openai_image_shape() {
+        let raw = serde_json::json!({
+            "data": [
+                {"b64_json": "abc"},
+                {"b64_json": "data:image/png;base64,def"}
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_images_from_chat_completions_response(&raw),
+            vec!["abc", "def"]
+        );
+    }
+
+    #[test]
+    fn chat_image_parser_extracts_message_json_payload() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"b64_json\":\"abc\"}"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_images_from_chat_completions_response(&raw),
+            vec!["abc"]
+        );
+    }
+
+    #[test]
+    fn chat_image_parser_extracts_content_array_image_url() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type":"text","text":"done"},
+                            {"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}
+                        ]
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_images_from_chat_completions_response(&raw),
+            vec!["abc"]
+        );
+    }
+
+    #[test]
+    fn chat_image_parser_extracts_markdown_image_url_text() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "![image](https://example.test/generated.png?sig=1)"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_images_from_chat_completions_response(&raw),
+            vec!["https://example.test/generated.png?sig=1"]
+        );
+    }
+
+    #[test]
+    fn chat_image_retry_detects_unsupported_size_or_n() {
+        assert!(should_retry_chat_image_without_generation_options(
+            "HTTP 400: unknown parameter: size"
+        ));
+        assert!(should_retry_chat_image_without_generation_options(
+            "HTTP 400: unsupported parameter 'n'"
+        ));
+        assert!(!should_retry_chat_image_without_generation_options(
+            "HTTP 401: invalid api key"
+        ));
+    }
+
+    #[test]
+    fn chat_image_retry_detects_unsupported_stream() {
+        assert!(should_retry_chat_image_without_stream(
+            "HTTP 400: unsupported parameter: stream"
+        ));
+        assert!(should_retry_chat_image_without_stream(
+            "HTTP 400: streaming is not supported"
+        ));
+        assert!(!should_retry_chat_image_without_stream(
+            "HTTP 400: unsupported parameter: size"
+        ));
+    }
+
+    #[test]
     fn model_id_extractor_accepts_openai_models_shape() {
         let value = serde_json::json!({
             "object": "list",
@@ -1398,6 +2918,139 @@ mod tests {
         assert_eq!(
             extract_model_ids(&value),
             vec!["model-a", "model-b", "model-c"]
+        );
+    }
+
+    #[test]
+    fn chat_video_body_uses_chat_completions_shape() {
+        let body = build_chat_completions_video_generation_body(
+            "video-model",
+            "make a short loop",
+            "1280x720",
+            "4",
+            true,
+            true,
+        );
+
+        assert_eq!(body["model"], "video-model");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "make a short loop");
+        assert_eq!(body["size"], "1280x720");
+        assert_eq!(body["seconds"], "4");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn videos_body_uses_videos_shape() {
+        let body =
+            build_videos_generation_body("video-model", "make a short loop", "1280x720", "4");
+
+        assert_eq!(body["model"], "video-model");
+        assert_eq!(body["prompt"], "make a short loop");
+        assert_eq!(body["size"], "1280x720");
+        assert_eq!(body["seconds"], "4");
+    }
+
+    #[test]
+    fn videos_job_parser_extracts_nested_status() {
+        let raw = serde_json::json!({
+            "data": {
+                "id": "video_123",
+                "status": "in_progress"
+            }
+        })
+        .to_string();
+
+        let job = parse_video_job_info(&raw).expect("video job");
+        assert_eq!(job.id, "video_123");
+        assert_eq!(job.status, "in_progress");
+    }
+
+    #[test]
+    fn videos_parser_extracts_direct_video_url() {
+        let raw = serde_json::json!({
+            "id": "video_123",
+            "status": "completed",
+            "video_url": "https://example.test/generated.mp4"
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_videos_from_video_api_response(&raw),
+            vec!["https://example.test/generated.mp4"]
+        );
+    }
+
+    #[test]
+    fn chat_video_parser_extracts_message_json_video_url() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"video_url\":\"https://example.test/out.mp4?sig=1\"}"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_videos_from_chat_completions_response(&raw),
+            vec!["https://example.test/out.mp4?sig=1"]
+        );
+    }
+
+    #[test]
+    fn chat_video_parser_extracts_content_array_video_url() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type":"text","text":"done"},
+                            {"type":"video_url","video_url":{"url":"https://example.test/out.webm"}}
+                        ]
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_videos_from_chat_completions_response(&raw),
+            vec!["https://example.test/out.webm"]
+        );
+    }
+
+    #[test]
+    fn chat_video_parser_extracts_data_video_base64() {
+        let raw = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "data:video/mp4;base64,abc"
+                    }
+                }
+            ]
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_videos_from_chat_completions_response(&raw),
+            vec!["abc"]
+        );
+    }
+
+    #[test]
+    fn chat_video_parser_extracts_sse_delta_video_url() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"video_url\\\":\\\"https://example.test/out.mov\\\"}\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        assert_eq!(
+            extract_videos_from_chat_completions_response(raw),
+            vec!["https://example.test/out.mov"]
         );
     }
 }

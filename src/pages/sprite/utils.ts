@@ -1,5 +1,14 @@
 import type { FrameData } from "../../api/commands";
+import { clampNumber } from "../../utils/number";
 import type { RegionDragMode, SplitRegion } from "./types";
+export {
+  getDirectoryName,
+  getFileName,
+  sanitizePathSegment,
+  stripFileExtension,
+  stripGifExtension,
+} from "../../utils/path";
+export { clampNumber };
 
 export function normalizeGridSize(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
@@ -32,11 +41,6 @@ export function getMinimumCellDimension(cellRects: SplitRegion[], key: "width" |
 export function parseRegionNumber(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-export function clampNumber(value: number, min: number, max: number): number {
-  if (max < min) return min;
-  return Math.min(max, Math.max(min, value));
 }
 
 export function getRegionCenterX(x: number, width: number): number {
@@ -94,34 +98,4 @@ export function summarizeFrameSizes(frames: FrameData[]): string {
     return `${maxW}x${maxH}`;
   }
   return `${minW}x${minH}-${maxW}x${maxH}`;
-}
-
-export function getFileName(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.split("/").pop() || path;
-}
-
-export function stripFileExtension(fileName: string): string {
-  const index = fileName.lastIndexOf(".");
-  return index > 0 ? fileName.slice(0, index) : fileName;
-}
-
-export function stripGifExtension(fileName: string): string {
-  return fileName.replace(/\.gif$/i, "");
-}
-
-export function sanitizePathSegment(value: string): string {
-  return value
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
-    .replace(/\s+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^[._\s-]+|[._\s-]+$/g, "");
-}
-
-export function joinPath(parent: string, child: string): string {
-  const separator = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
-  return parent.endsWith("/") || parent.endsWith("\\")
-    ? `${parent}${child}`
-    : `${parent}${separator}${child}`;
 }

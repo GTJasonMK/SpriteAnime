@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{command, State};
 
+use crate::asset_library::{self, AssetCategory};
 use crate::config::AppState;
 
 static TEMP_VIDEO_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -25,19 +26,6 @@ impl TempCleanupResult {
     fn add(&mut self, other: TempCleanupResult) {
         self.removed_files += other.removed_files;
         self.removed_dirs += other.removed_dirs;
-    }
-}
-
-/// 使用系统对话框选择目录并返回路径
-#[command]
-pub async fn select_directory(app: tauri::AppHandle) -> Result<String, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let result = app.dialog().file().blocking_pick_folder();
-
-    match result {
-        Some(path) => Ok(path.to_string()),
-        None => Err("用户取消选择".into()),
     }
 }
 
@@ -99,6 +87,60 @@ pub async fn open_video_file(app: tauri::AppHandle) -> Result<FileOpenResult, St
     }
 }
 
+#[command]
+pub fn import_image_to_library(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<FileOpenResult, String> {
+    import_file_to_library(
+        state,
+        source_path,
+        AssetCategory::ImportedImages,
+        "image.png",
+    )
+}
+
+#[command]
+pub fn import_video_to_library(
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<FileOpenResult, String> {
+    import_file_to_library(
+        state,
+        source_path,
+        AssetCategory::OriginalVideos,
+        "video.mp4",
+    )
+}
+
+fn import_file_to_library(
+    state: State<'_, AppState>,
+    source_path: String,
+    category: AssetCategory,
+    fallback_name: &str,
+) -> Result<FileOpenResult, String> {
+    let dest = {
+        let config = state.config.lock();
+        asset_library::copy_file_to_category(
+            &source_path,
+            &state.default_save_dir,
+            &config.save_dir,
+            category,
+        )?
+    };
+    let file_name = dest
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| fallback_name.into());
+
+    Ok(FileOpenResult {
+        file_path: dest.to_string_lossy().to_string(),
+        file_name,
+        base64_data: String::new(),
+    })
+}
+
 /// 将视频复制到 app 数据目录，规避源路径不在 asset scope 中导致的 WebView 加载失败。
 #[command]
 pub fn prepare_video_file_for_playback(
@@ -129,12 +171,7 @@ pub fn prepare_video_file_for_playback(
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "video".into());
 
-    let root = state
-        .workbench_records_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("sprite-animte"))
-        .join("temp_videos");
+    let root = app_data_root(&state)?.join("temp_videos");
     std::fs::create_dir_all(&root).map_err(|e| format!("创建临时视频目录失败: {}", e))?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
@@ -164,7 +201,7 @@ pub fn cleanup_prepared_video_file(
     path: String,
 ) -> Result<TempCleanupResult, String> {
     cleanup_path_inside_root(
-        &temp_videos_root(&state),
+        &temp_videos_root(&state)?,
         Path::new(&path),
         TempPathKind::File,
     )
@@ -177,7 +214,7 @@ pub fn cleanup_video_frame_batch_dir(
     output_dir: String,
 ) -> Result<TempCleanupResult, String> {
     cleanup_path_inside_root(
-        &temp_video_frames_root(&state),
+        &temp_video_frames_root(&state)?,
         Path::new(&output_dir),
         TempPathKind::Dir,
     )
@@ -189,25 +226,25 @@ pub fn cleanup_video_sprite_temp_files(
     state: State<'_, AppState>,
 ) -> Result<TempCleanupResult, String> {
     let mut summary = TempCleanupResult::default();
-    summary.add(cleanup_files_in_root(&temp_videos_root(&state))?);
-    summary.add(cleanup_dirs_in_root(&temp_video_frames_root(&state))?);
+    summary.add(cleanup_files_in_root(&temp_videos_root(&state)?)?);
+    summary.add(cleanup_dirs_in_root(&temp_video_frames_root(&state)?)?);
     Ok(summary)
 }
 
-fn app_data_root(state: &AppState) -> PathBuf {
+fn app_data_root(state: &AppState) -> Result<PathBuf, String> {
     state
         .workbench_records_path
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("sprite-animte"))
+        .ok_or_else(|| "应用数据目录不可用".into())
 }
 
-fn temp_videos_root(state: &AppState) -> PathBuf {
-    app_data_root(state).join("temp_videos")
+fn temp_videos_root(state: &AppState) -> Result<PathBuf, String> {
+    Ok(app_data_root(state)?.join("temp_videos"))
 }
 
-fn temp_video_frames_root(state: &AppState) -> PathBuf {
-    app_data_root(state).join("temp_video_frames")
+fn temp_video_frames_root(state: &AppState) -> Result<PathBuf, String> {
+    Ok(app_data_root(state)?.join("temp_video_frames"))
 }
 
 #[derive(Debug, Clone, Copy)]

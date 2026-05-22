@@ -26,25 +26,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": [
-            "$HOME/**",
-            "$PICTURE/**",
-            "$DOCUMENT/**",
-            "$DOWNLOAD/**",
-            "$DESKTOP/**",
-            "$DATA/sprite-animte/**",
-            "$APPDATA/**",
-            "$APPLOCALDATA/**",
-            "$HOME/.local/share/sprite-animte/**",
-            "$TEMP/**"
-          ],
-          "deny": [
-            "$HOME/.ssh/**",
-            "$HOME/.gnupg/**",
-            "$HOME/.aws/**",
-            "$HOME/.azure/**",
-            "$HOME/.kube/**"
-          ]
+          "allow": [],
+          "deny": []
         }
       }
     }

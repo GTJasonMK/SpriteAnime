@@ -1,33 +1,24 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
+import { createRequire } from "node:module";
+import {
+  cleanupTempDir,
+  compileCommonJsModule,
+  getRepoRoot,
+  resetTempDir,
+  runTests,
+} from "./ts-test-helpers.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = path.join(tmpdir(), "spriteanime-workflow-tests");
+const root = getRepoRoot(import.meta.url);
+const outDir = resetTempDir("spriteanime-workflow-tests");
+const require = createRequire(import.meta.url);
 
-function compileModule(sourceRelativePath) {
-  const sourcePath = path.join(root, sourceRelativePath);
-  const compiledPath = path.join(outDir, `${sourceRelativePath.replace(/[\\/]/g, "__")}.js`);
-  const transpiled = ts.transpileModule(readFileSync(sourcePath, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.ES2022,
-      target: ts.ScriptTarget.ES2022,
-      strict: true,
-    },
-    fileName: sourcePath,
-  });
-  writeFileSync(compiledPath, transpiled.outputText);
-  return pathToFileURL(compiledPath).href;
-}
-
-rmSync(outDir, { recursive: true, force: true });
-mkdirSync(outDir, { recursive: true });
-
-const generatorWorkflow = await import(compileModule("src/pages/generator-workflow.ts"));
-const spriteWorkflow = await import(compileModule("src/pages/sprite/workflow-state.ts"));
+compileCommonJsModule(root, outDir, "src/pages/workflow-permissions.ts");
+const generatorWorkflow = require(
+  compileCommonJsModule(root, outDir, "src/pages/generator-workflow.ts")
+);
+const spriteWorkflow = require(
+  compileCommonJsModule(root, outDir, "src/pages/sprite/workflow-state.ts")
+);
 
 function testGeneratorWorkflow() {
   const empty = generatorWorkflow.getGeneratorWorkflowPermissions("empty", {
@@ -151,8 +142,10 @@ function testSpriteWorkflow() {
   assert.equal(split.pickImage, false);
 }
 
-testGeneratorWorkflow();
-testSpriteWorkflow();
+runTests([
+  testGeneratorWorkflow,
+  testSpriteWorkflow,
+]);
 
-rmSync(outDir, { recursive: true, force: true });
+cleanupTempDir(outDir);
 console.log("Workflow state tests passed.");

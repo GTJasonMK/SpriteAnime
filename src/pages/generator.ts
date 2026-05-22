@@ -3,6 +3,8 @@ import {
   getPresets,
   loadConfig,
   saveConfig,
+  exportConfig,
+  importConfig,
   checkGenerationApi,
   checkPromptOptimizerApi,
   generateImage,
@@ -16,12 +18,13 @@ import {
   saveMattedImageDataUrl,
   readImageAsBase64,
   optimizePrompt,
-  selectDirectory,
   openImageFile,
+  importImageToLibrary,
   revealInExplorer,
   openImageFilePath,
   type PresetsPayload,
   type UserConfig,
+  type ApiProfile,
   type ApiCheckResult,
   type GenerateEvent,
   type GenerationResult,
@@ -38,10 +41,57 @@ import {
   type GeneratorAction,
   type GeneratorWorkflowState,
 } from "./generator-workflow";
+import { getById, queryAll } from "../utils/dom";
+import { loadImageFromDataUrl } from "../utils/image";
+import { parseClampedInt } from "../utils/number";
+import { getDirectoryName, getFileName, stripFileExtension } from "../utils/path";
+import { clickTab, dispatchPrepareSpriteFromGenerator } from "./navigation";
+import {
+  renderGeneratedGallery,
+  setSelectedGeneratedPreview,
+  updateGeneratedGallerySelection,
+} from "./generator-gallery";
 
 interface SpriteGridPreset {
   rows: number;
   cols: number;
+}
+
+interface PromptOptimizerSettings {
+  apiKey: string;
+  apiBase: string;
+  model: string;
+}
+
+interface ApiProfileFormValues {
+  apiKey: string;
+  apiBase: string;
+  proxyUrl: string;
+  apiMode: string;
+  model: string;
+  videoApiKey: string;
+  videoApiBase: string;
+  videoProxyUrl: string;
+  videoModel: string;
+  videoApiMode: string;
+  promptOptimizerApiKey: string;
+  promptOptimizerApiBase: string;
+  promptOptimizerModel: string;
+  promptOptimizerVision: boolean;
+}
+
+export interface ActiveApiSettings {
+  apiKey: string;
+  apiBase: string;
+  proxyUrl: string;
+  apiMode: string;
+  model: string;
+  videoApiKey: string;
+  videoApiBase: string;
+  videoProxyUrl: string;
+  videoModel: string;
+  videoApiMode: string;
+  profileName: string;
 }
 
 interface GeneratedImageRecord {
@@ -57,6 +107,10 @@ interface GeneratedImageRecord {
 
 const DEFAULT_PROMPT_OPTIMIZER_API_BASE = "https://api.deepseek.com";
 const DEFAULT_PROMPT_OPTIMIZER_MODEL = "deepseek-v4-flash";
+const DEFAULT_GENERATION_MODEL = "gpt-5.3-codex";
+const DEFAULT_GENERATION_API_MODE = "responses";
+const DEFAULT_VIDEO_MODEL = "sora-2";
+const DEFAULT_VIDEO_API_MODE = "chat_completions";
 
 /// 图片生成页面控制器
 export class GeneratorPage {
@@ -92,11 +146,27 @@ export class GeneratorPage {
     apiKey: HTMLInputElement;
     apiBase: HTMLInputElement;
     proxyUrl: HTMLInputElement;
+    generationApiMode: HTMLSelectElement;
+    activeApiProfile: HTMLSelectElement;
+    profileName: HTMLInputElement;
+    profileList: HTMLElement;
+    addApiProfile: HTMLButtonElement;
+    duplicateApiProfile: HTMLButtonElement;
+    deleteApiProfile: HTMLButtonElement;
+    importConfig: HTMLButtonElement;
+    exportConfig: HTMLButtonElement;
     toggleKey: HTMLButtonElement;
     model: HTMLInputElement;
     modelList: HTMLDataListElement;
     checkGenerationApi: HTMLButtonElement;
     generationApiCheckStatus: HTMLElement;
+    videoApiKey: HTMLInputElement;
+    videoApiBase: HTMLInputElement;
+    videoProxyUrl: HTMLInputElement;
+    videoModel: HTMLInputElement;
+    videoApiMode: HTMLSelectElement;
+    checkVideoApi: HTMLButtonElement;
+    videoApiCheckStatus: HTMLElement;
     optimizePrompt: HTMLButtonElement;
     promptOptimizerApiKey: HTMLInputElement;
     promptOptimizerApiBase: HTMLInputElement;
@@ -118,7 +188,6 @@ export class GeneratorPage {
     saveDir: HTMLInputElement;
     ffmpegPath: HTMLInputElement;
     ffprobePath: HTMLInputElement;
-    browseDir: HTMLButtonElement;
     generate: HTMLButtonElement;
     viewImage: HTMLButtonElement;
     openDir: HTMLButtonElement;
@@ -161,6 +230,8 @@ export class GeneratorPage {
     btnSettings: HTMLButtonElement;
     modalOverlay: HTMLElement;
     btnCloseModal: HTMLButtonElement;
+    settingsTabs: HTMLElement[];
+    settingsPanels: HTMLElement[];
   };
 
   constructor() {
@@ -209,80 +280,96 @@ export class GeneratorPage {
   }
 
   private cacheElements(): void {
-    const g = (id: string) => document.getElementById(id) as HTMLElement;
     this.els = {
-      apiKey: g("api-key") as HTMLInputElement,
-      apiBase: g("api-base") as HTMLInputElement,
-      proxyUrl: g("proxy-url") as HTMLInputElement,
-      toggleKey: g("btn-toggle-key") as HTMLButtonElement,
-      model: g("model-input") as HTMLInputElement,
-      modelList: g("model-list") as HTMLDataListElement,
-      checkGenerationApi: g("btn-check-generation-api") as HTMLButtonElement,
-      generationApiCheckStatus: g("generation-api-check-status"),
-      optimizePrompt: g("btn-optimize-prompt") as HTMLButtonElement,
-      promptOptimizerApiKey: g("prompt-optimizer-api-key") as HTMLInputElement,
-      promptOptimizerApiBase: g("prompt-optimizer-api-base") as HTMLInputElement,
-      promptOptimizerModel: g("prompt-optimizer-model-input") as HTMLInputElement,
-      promptOptimizerVision: g("prompt-optimizer-vision") as HTMLInputElement,
-      checkPromptOptimizerApi: g("btn-check-prompt-optimizer-api") as HTMLButtonElement,
-      promptOptimizerApiCheckStatus: g("prompt-optimizer-api-check-status"),
-      style: g("style-select") as HTMLSelectElement,
-      ratio: g("ratio-select") as HTMLSelectElement,
-      resolution: g("resolution-select") as HTMLSelectElement,
-      count: g("count-select") as HTMLSelectElement,
-      prompt: g("prompt-input") as HTMLTextAreaElement,
-      negPrompt: g("neg-prompt-input") as HTMLInputElement,
-      referenceImageName: g("reference-image-name") as HTMLInputElement,
-      referenceImagePreview: g("reference-image-preview") as HTMLImageElement,
-      referenceImageEmpty: g("reference-image-empty"),
-      pickReferenceImage: g("btn-pick-reference-image") as HTMLButtonElement,
-      clearReferenceImage: g("btn-clear-reference-image") as HTMLButtonElement,
-      saveDir: g("save-dir-input") as HTMLInputElement,
-      ffmpegPath: g("ffmpeg-path") as HTMLInputElement,
-      ffprobePath: g("ffprobe-path") as HTMLInputElement,
-      browseDir: g("btn-browse-dir") as HTMLButtonElement,
-      generate: g("btn-generate") as HTMLButtonElement,
-      viewImage: g("btn-view-image") as HTMLButtonElement,
-      openDir: g("btn-open-dir") as HTMLButtonElement,
-      transparentBackground: g("btn-transparent-background") as HTMLButtonElement,
-      toSprite: g("btn-to-sprite") as HTMLButtonElement,
-      saveConfig: g("btn-save-config") as HTMLButtonElement,
-      progressContainer: g("progress-container"),
-      progressFill: g("progress-fill"),
-      progressText: g("progress-text"),
-      toolbarStatus: g("toolbar-status"),
-      generationParams: g("generation-params"),
-      mattingParams: g("matting-params"),
-      workspaceEmpty: g("workspace-empty"),
-      resultCard: g("result-card"),
-      resultGrid: g("result-grid"),
-      resultActions: g("result-actions"),
-      selectedPreview: g("selected-preview"),
-      selectedImage: g("selected-image") as HTMLImageElement,
-      mattingCanvas: g("matting-canvas") as HTMLCanvasElement,
-      selectedMeta: g("selected-meta"),
-      galleryCount: g("gallery-count"),
-      addRecord: g("btn-add-record") as HTMLButtonElement,
-      addRecordEmpty: g("btn-add-record-empty") as HTMLButtonElement,
-      deleteRecord: g("btn-delete-record") as HTMLButtonElement,
-      clearRecords: g("btn-clear-records") as HTMLButtonElement,
-      exitMatting: g("btn-exit-matting") as HTMLButtonElement,
-      runMatting: g("btn-run-matting") as HTMLButtonElement,
-      undoMatting: g("btn-undo-matting") as HTMLButtonElement,
-      redoMatting: g("btn-redo-matting") as HTMLButtonElement,
-      saveMatting: g("btn-save-matting") as HTMLButtonElement,
-      mattingTolerance: g("matting-tolerance-input") as HTMLInputElement,
-      mattingToleranceLabel: g("matting-tolerance-label"),
-      mattingFeather: g("matting-feather-input") as HTMLInputElement,
-      mattingFeatherLabel: g("matting-feather-label"),
-      mattingColorKey: g("matting-color-key-select") as HTMLSelectElement,
-      mattingClickTolerance: g("matting-click-tolerance-input") as HTMLInputElement,
-      mattingClickToleranceLabel: g("matting-click-tolerance-label"),
-      mattingClickRadius: g("matting-click-radius-input") as HTMLInputElement,
-      mattingClickRadiusLabel: g("matting-click-radius-label"),
-      btnSettings: g("btn-settings") as HTMLButtonElement,
-      modalOverlay: g("settings-modal"),
-      btnCloseModal: g("btn-close-modal") as HTMLButtonElement,
+      apiKey: getById<HTMLInputElement>("api-key"),
+      apiBase: getById<HTMLInputElement>("api-base"),
+      proxyUrl: getById<HTMLInputElement>("proxy-url"),
+      generationApiMode: getById<HTMLSelectElement>("generation-api-mode"),
+      activeApiProfile: getById<HTMLSelectElement>("active-api-profile"),
+      profileName: getById<HTMLInputElement>("api-profile-name"),
+      profileList: getById("api-profile-list"),
+      addApiProfile: getById<HTMLButtonElement>("btn-add-api-profile"),
+      duplicateApiProfile: getById<HTMLButtonElement>("btn-duplicate-api-profile"),
+      deleteApiProfile: getById<HTMLButtonElement>("btn-delete-api-profile"),
+      importConfig: getById<HTMLButtonElement>("btn-import-config"),
+      exportConfig: getById<HTMLButtonElement>("btn-export-config"),
+      toggleKey: getById<HTMLButtonElement>("btn-toggle-key"),
+      model: getById<HTMLInputElement>("model-input"),
+      modelList: getById<HTMLDataListElement>("model-list"),
+      checkGenerationApi: getById<HTMLButtonElement>("btn-check-generation-api"),
+      generationApiCheckStatus: getById("generation-api-check-status"),
+      videoApiKey: getById<HTMLInputElement>("video-api-key"),
+      videoApiBase: getById<HTMLInputElement>("video-api-base"),
+      videoProxyUrl: getById<HTMLInputElement>("video-proxy-url"),
+      videoModel: getById<HTMLInputElement>("video-model-input"),
+      videoApiMode: getById<HTMLSelectElement>("video-api-mode"),
+      checkVideoApi: getById<HTMLButtonElement>("btn-check-video-api"),
+      videoApiCheckStatus: getById("video-api-check-status"),
+      optimizePrompt: getById<HTMLButtonElement>("btn-optimize-prompt"),
+      promptOptimizerApiKey: getById<HTMLInputElement>("prompt-optimizer-api-key"),
+      promptOptimizerApiBase: getById<HTMLInputElement>("prompt-optimizer-api-base"),
+      promptOptimizerModel: getById<HTMLInputElement>("prompt-optimizer-model-input"),
+      promptOptimizerVision: getById<HTMLInputElement>("prompt-optimizer-vision"),
+      checkPromptOptimizerApi: getById<HTMLButtonElement>("btn-check-prompt-optimizer-api"),
+      promptOptimizerApiCheckStatus: getById("prompt-optimizer-api-check-status"),
+      style: getById<HTMLSelectElement>("style-select"),
+      ratio: getById<HTMLSelectElement>("ratio-select"),
+      resolution: getById<HTMLSelectElement>("resolution-select"),
+      count: getById<HTMLSelectElement>("count-select"),
+      prompt: getById<HTMLTextAreaElement>("prompt-input"),
+      negPrompt: getById<HTMLInputElement>("neg-prompt-input"),
+      referenceImageName: getById<HTMLInputElement>("reference-image-name"),
+      referenceImagePreview: getById<HTMLImageElement>("reference-image-preview"),
+      referenceImageEmpty: getById("reference-image-empty"),
+      pickReferenceImage: getById<HTMLButtonElement>("btn-pick-reference-image"),
+      clearReferenceImage: getById<HTMLButtonElement>("btn-clear-reference-image"),
+      saveDir: getById<HTMLInputElement>("save-dir-input"),
+      ffmpegPath: getById<HTMLInputElement>("ffmpeg-path"),
+      ffprobePath: getById<HTMLInputElement>("ffprobe-path"),
+      generate: getById<HTMLButtonElement>("btn-generate"),
+      viewImage: getById<HTMLButtonElement>("btn-view-image"),
+      openDir: getById<HTMLButtonElement>("btn-open-dir"),
+      transparentBackground: getById<HTMLButtonElement>("btn-transparent-background"),
+      toSprite: getById<HTMLButtonElement>("btn-to-sprite"),
+      saveConfig: getById<HTMLButtonElement>("btn-save-config"),
+      progressContainer: getById("progress-container"),
+      progressFill: getById("progress-fill"),
+      progressText: getById("progress-text"),
+      toolbarStatus: getById("toolbar-status"),
+      generationParams: getById("generation-params"),
+      mattingParams: getById("matting-params"),
+      workspaceEmpty: getById("workspace-empty"),
+      resultCard: getById("result-card"),
+      resultGrid: getById("result-grid"),
+      resultActions: getById("result-actions"),
+      selectedPreview: getById("selected-preview"),
+      selectedImage: getById<HTMLImageElement>("selected-image"),
+      mattingCanvas: getById<HTMLCanvasElement>("matting-canvas"),
+      selectedMeta: getById("selected-meta"),
+      galleryCount: getById("gallery-count"),
+      addRecord: getById<HTMLButtonElement>("btn-add-record"),
+      addRecordEmpty: getById<HTMLButtonElement>("btn-add-record-empty"),
+      deleteRecord: getById<HTMLButtonElement>("btn-delete-record"),
+      clearRecords: getById<HTMLButtonElement>("btn-clear-records"),
+      exitMatting: getById<HTMLButtonElement>("btn-exit-matting"),
+      runMatting: getById<HTMLButtonElement>("btn-run-matting"),
+      undoMatting: getById<HTMLButtonElement>("btn-undo-matting"),
+      redoMatting: getById<HTMLButtonElement>("btn-redo-matting"),
+      saveMatting: getById<HTMLButtonElement>("btn-save-matting"),
+      mattingTolerance: getById<HTMLInputElement>("matting-tolerance-input"),
+      mattingToleranceLabel: getById("matting-tolerance-label"),
+      mattingFeather: getById<HTMLInputElement>("matting-feather-input"),
+      mattingFeatherLabel: getById("matting-feather-label"),
+      mattingColorKey: getById<HTMLSelectElement>("matting-color-key-select"),
+      mattingClickTolerance: getById<HTMLInputElement>("matting-click-tolerance-input"),
+      mattingClickToleranceLabel: getById("matting-click-tolerance-label"),
+      mattingClickRadius: getById<HTMLInputElement>("matting-click-radius-input"),
+      mattingClickRadiusLabel: getById("matting-click-radius-label"),
+      btnSettings: getById<HTMLButtonElement>("btn-settings"),
+      modalOverlay: getById("settings-modal"),
+      btnCloseModal: getById<HTMLButtonElement>("btn-close-modal"),
+      settingsTabs: queryAll<HTMLElement>(".settings-tab"),
+      settingsPanels: queryAll<HTMLElement>(".settings-panel"),
     };
   }
 
@@ -296,7 +383,12 @@ export class GeneratorPage {
 
       // 加载用户配置
       this.config = await loadConfig();
-      console.log("[generator] 配置加载完成", { model: this.config.last_model, hasApiKey: !!this.config.api_key });
+      this.normalizeApiProfiles();
+      console.log("[generator] 配置加载完成", {
+        model: this.getActiveApiProfile().last_model,
+        profiles: this.config.api_profiles.length,
+        hasApiKey: !!this.getActiveApiProfile().api_key,
+      });
 
       // 加载提示词历史
       this.promptHistory = await getPromptHistory(100);
@@ -319,6 +411,39 @@ export class GeneratorPage {
   setExternalReferenceImage(path: string, name?: string): void {
     this.setReferenceImage(path, name || getFileName(path) || "参考图");
     this.els.toolbarStatus.textContent = "已设置参考图";
+  }
+
+  getActiveApiSettings(): ActiveApiSettings {
+    if (!this.config) {
+      return {
+        apiKey: "",
+        apiBase: "",
+        proxyUrl: "",
+        apiMode: DEFAULT_GENERATION_API_MODE,
+        model: DEFAULT_GENERATION_MODEL,
+        videoApiKey: "",
+        videoApiBase: "",
+        videoProxyUrl: "",
+        videoModel: DEFAULT_VIDEO_MODEL,
+        videoApiMode: DEFAULT_VIDEO_API_MODE,
+        profileName: "默认 API",
+      };
+    }
+    this.writeFormToActiveProfile();
+    const profile = this.getActiveApiProfile();
+    return {
+      apiKey: profile.api_key || "",
+      apiBase: profile.api_base || "",
+      proxyUrl: profile.proxy_url || "",
+      apiMode: normalizeGenerationApiMode(profile.generation_api_mode),
+      model: profile.last_model || DEFAULT_GENERATION_MODEL,
+      videoApiKey: profile.video_api_key || profile.api_key || "",
+      videoApiBase: profile.video_api_base || profile.api_base || "",
+      videoProxyUrl: profile.video_proxy_url || profile.proxy_url || "",
+      videoModel: profile.video_model || DEFAULT_VIDEO_MODEL,
+      videoApiMode: normalizeVideoApiMode(profile.video_api_mode),
+      profileName: profile.name || "API 配置",
+    };
   }
 
   private populateDropdowns(): void {
@@ -355,34 +480,439 @@ export class GeneratorPage {
   private applyConfig(): void {
     if (!this.config) return;
     const c = this.config;
-    this.els.apiKey.value = c.api_key;
-    if (c.api_base) {
-      this.els.apiBase.value = c.api_base;
-    }
-    if (c.proxy_url) {
-      this.els.proxyUrl.value = c.proxy_url;
-    }
-    this.els.model.value = c.last_model;
-    this.els.promptOptimizerApiKey.value = c.prompt_optimizer_api_key || "";
-    this.els.promptOptimizerApiBase.value =
-      c.prompt_optimizer_api_base || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
-    this.els.promptOptimizerModel.value =
-      c.prompt_optimizer_model || DEFAULT_PROMPT_OPTIMIZER_MODEL;
-    this.els.promptOptimizerVision.checked = Boolean(c.prompt_optimizer_vision);
+    this.normalizeApiProfiles();
+    this.renderApiProfiles();
+    this.applyProfileToForm(this.getActiveApiProfile());
     setSelectValue(this.els.style, c.last_style);
     setSelectValue(this.els.ratio, c.last_ratio);
     setSelectValue(this.els.resolution, c.last_resolution);
     setSelectValue(this.els.count, String(c.last_count));
-    if (c.save_dir) {
-      this.els.saveDir.value = c.save_dir;
-    }
+    this.els.saveDir.value = c.save_dir || "";
     this.els.ffmpegPath.value = c.ffmpeg_path || "";
     this.els.ffprobePath.value = c.ffprobe_path || "";
+  }
+
+  private normalizeApiProfiles(): void {
+    if (!this.config) return;
+    const profiles = Array.isArray(this.config.api_profiles)
+      ? this.config.api_profiles
+      : [];
+    if (profiles.length === 0) {
+      profiles.push(this.createApiProfile("默认 API", {
+        apiKey: this.config.api_key || "",
+        apiBase: this.config.api_base || "",
+        proxyUrl: this.config.proxy_url || "",
+        apiMode: normalizeGenerationApiMode(this.config.generation_api_mode),
+        model: this.config.last_model || DEFAULT_GENERATION_MODEL,
+        videoApiKey: this.config.video_api_key || "",
+        videoApiBase: this.config.video_api_base || "",
+        videoProxyUrl: this.config.video_proxy_url || "",
+        videoModel: this.config.video_model || DEFAULT_VIDEO_MODEL,
+        videoApiMode: normalizeVideoApiMode(this.config.video_api_mode),
+        promptOptimizerApiKey: this.config.prompt_optimizer_api_key || "",
+        promptOptimizerApiBase:
+          this.config.prompt_optimizer_api_base || DEFAULT_PROMPT_OPTIMIZER_API_BASE,
+        promptOptimizerModel:
+          this.config.prompt_optimizer_model || DEFAULT_PROMPT_OPTIMIZER_MODEL,
+        promptOptimizerVision: Boolean(this.config.prompt_optimizer_vision),
+      }));
+    }
+
+    const usedIds = new Set<string>();
+    this.config.api_profiles = profiles.map((profile, index) => {
+      const fallbackId = index === 0 ? "default" : `api-profile-${index + 1}`;
+      const id = this.uniqueApiProfileId(profile.id || fallbackId, usedIds);
+      usedIds.add(id);
+      return {
+        id,
+        name: (profile.name || "").trim() || `API 配置 ${index + 1}`,
+        api_key: (profile.api_key || "").trim(),
+        api_base: (profile.api_base || "").trim(),
+        proxy_url: (profile.proxy_url || "").trim(),
+        generation_api_mode: normalizeGenerationApiMode(profile.generation_api_mode),
+        last_model: (profile.last_model || "").trim() || DEFAULT_GENERATION_MODEL,
+        video_api_key: (profile.video_api_key || "").trim(),
+        video_api_base: (profile.video_api_base || "").trim(),
+        video_proxy_url: (profile.video_proxy_url || "").trim(),
+        video_model: (profile.video_model || "").trim() || DEFAULT_VIDEO_MODEL,
+        video_api_mode: normalizeVideoApiMode(profile.video_api_mode),
+        prompt_optimizer_api_key: (profile.prompt_optimizer_api_key || "").trim(),
+        prompt_optimizer_api_base:
+          (profile.prompt_optimizer_api_base || "").trim() ||
+          DEFAULT_PROMPT_OPTIMIZER_API_BASE,
+        prompt_optimizer_model:
+          (profile.prompt_optimizer_model || "").trim() ||
+          DEFAULT_PROMPT_OPTIMIZER_MODEL,
+        prompt_optimizer_vision: Boolean(profile.prompt_optimizer_vision),
+      };
+    });
+
+    if (
+      !this.config.api_profiles.some(
+        (profile) => profile.id === this.config!.active_api_profile_id
+      )
+    ) {
+      this.config.active_api_profile_id = this.config.api_profiles[0].id;
+    }
+    this.syncActiveProfileToLegacyConfig();
+  }
+
+  private getActiveApiProfile(): ApiProfile {
+    if (!this.config) {
+      return this.createApiProfile("默认 API");
+    }
+    return (
+      this.config.api_profiles.find(
+        (profile) => profile.id === this.config!.active_api_profile_id
+      ) || this.config.api_profiles[0]
+    );
+  }
+
+  private getCurrentProfileFormValues(): ApiProfileFormValues {
+    return {
+      apiKey: this.els.apiKey.value.trim(),
+      apiBase: this.els.apiBase.value.trim(),
+      proxyUrl: this.els.proxyUrl.value.trim(),
+      apiMode: normalizeGenerationApiMode(this.els.generationApiMode.value),
+      model: this.els.model.value.trim(),
+      videoApiKey: this.els.videoApiKey.value.trim(),
+      videoApiBase: this.els.videoApiBase.value.trim(),
+      videoProxyUrl: this.els.videoProxyUrl.value.trim(),
+      videoModel: this.els.videoModel.value.trim(),
+      videoApiMode: normalizeVideoApiMode(this.els.videoApiMode.value),
+      promptOptimizerApiKey: this.els.promptOptimizerApiKey.value.trim(),
+      promptOptimizerApiBase: this.els.promptOptimizerApiBase.value.trim(),
+      promptOptimizerModel: this.els.promptOptimizerModel.value.trim(),
+      promptOptimizerVision: this.els.promptOptimizerVision.checked,
+    };
+  }
+
+  private applyProfileToForm(profile: ApiProfile): void {
+    this.els.apiKey.value = profile.api_key || "";
+    this.els.apiBase.value = profile.api_base || "";
+    this.els.proxyUrl.value = profile.proxy_url || "";
+    setSelectValue(this.els.generationApiMode, normalizeGenerationApiMode(profile.generation_api_mode));
+    this.els.model.value = profile.last_model || DEFAULT_GENERATION_MODEL;
+    this.els.videoApiKey.value = profile.video_api_key || "";
+    this.els.videoApiBase.value = profile.video_api_base || "";
+    this.els.videoProxyUrl.value = profile.video_proxy_url || "";
+    this.els.videoModel.value = profile.video_model || DEFAULT_VIDEO_MODEL;
+    setSelectValue(this.els.videoApiMode, normalizeVideoApiMode(profile.video_api_mode));
+    this.els.promptOptimizerApiKey.value = profile.prompt_optimizer_api_key || "";
+    this.els.promptOptimizerApiBase.value =
+      profile.prompt_optimizer_api_base || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
+    this.els.promptOptimizerModel.value =
+      profile.prompt_optimizer_model || DEFAULT_PROMPT_OPTIMIZER_MODEL;
+    this.els.promptOptimizerVision.checked = Boolean(profile.prompt_optimizer_vision);
+    this.els.profileName.value = profile.name || "";
+    this.clearApiCheckStatuses();
+  }
+
+  private writeFormToActiveProfile(): void {
+    if (!this.config) return;
+    const profile = this.getActiveApiProfile();
+    const values = this.getCurrentProfileFormValues();
+    profile.name = this.els.profileName.value.trim() || profile.name || "API 配置";
+    profile.api_key = values.apiKey;
+    profile.api_base = values.apiBase;
+    profile.proxy_url = values.proxyUrl;
+    profile.generation_api_mode = values.apiMode;
+    profile.last_model = values.model || DEFAULT_GENERATION_MODEL;
+    profile.video_api_key = values.videoApiKey;
+    profile.video_api_base = values.videoApiBase;
+    profile.video_proxy_url = values.videoProxyUrl;
+    profile.video_model = values.videoModel || DEFAULT_VIDEO_MODEL;
+    profile.video_api_mode = values.videoApiMode;
+    profile.prompt_optimizer_api_key = values.promptOptimizerApiKey;
+    profile.prompt_optimizer_api_base =
+      values.promptOptimizerApiBase || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
+    profile.prompt_optimizer_model =
+      values.promptOptimizerModel || DEFAULT_PROMPT_OPTIMIZER_MODEL;
+    profile.prompt_optimizer_vision = values.promptOptimizerVision;
+    this.syncActiveProfileToLegacyConfig();
+  }
+
+  private syncActiveProfileToLegacyConfig(): void {
+    if (!this.config) return;
+    const profile = this.getActiveApiProfile();
+    this.config.api_key = profile.api_key;
+    this.config.api_base = profile.api_base;
+    this.config.proxy_url = profile.proxy_url;
+    this.config.generation_api_mode = normalizeGenerationApiMode(profile.generation_api_mode);
+    this.config.last_model = profile.last_model;
+    this.config.video_api_key = profile.video_api_key;
+    this.config.video_api_base = profile.video_api_base;
+    this.config.video_proxy_url = profile.video_proxy_url;
+    this.config.video_model = profile.video_model || DEFAULT_VIDEO_MODEL;
+    this.config.video_api_mode = normalizeVideoApiMode(profile.video_api_mode);
+    this.config.prompt_optimizer_api_key = profile.prompt_optimizer_api_key;
+    this.config.prompt_optimizer_api_base = profile.prompt_optimizer_api_base;
+    this.config.prompt_optimizer_model = profile.prompt_optimizer_model;
+    this.config.prompt_optimizer_vision = profile.prompt_optimizer_vision;
+  }
+
+  private syncActiveApiProfileFromForm(): void {
+    if (!this.config) return;
+    this.writeFormToActiveProfile();
+    this.renderApiProfiles();
+  }
+
+  private renderApiProfiles(): void {
+    if (!this.config) return;
+    const activeId = this.config.active_api_profile_id;
+
+    this.els.activeApiProfile.innerHTML = "";
+    this.config.api_profiles.forEach((profile) => {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.name || "API 配置";
+      option.selected = profile.id === activeId;
+      this.els.activeApiProfile.appendChild(option);
+    });
+
+    this.els.profileList.innerHTML = "";
+    this.config.api_profiles.forEach((profile) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "api-profile-item";
+      button.classList.toggle("active", profile.id === activeId);
+      button.dataset.profileId = profile.id;
+
+      const name = document.createElement("span");
+      name.className = "api-profile-name";
+      name.textContent = profile.name || "API 配置";
+      button.appendChild(name);
+
+      const meta = document.createElement("span");
+      meta.className = "api-profile-meta";
+      meta.textContent = `图: ${profile.last_model || DEFAULT_GENERATION_MODEL} · 视频: ${profile.video_model || DEFAULT_VIDEO_MODEL}`;
+      button.appendChild(meta);
+
+      button.addEventListener("click", () => this.switchApiProfile(profile.id));
+      this.els.profileList.appendChild(button);
+    });
+
+    const activeProfile = this.getActiveApiProfile();
+    this.els.profileName.value = activeProfile.name;
+    this.els.deleteApiProfile.disabled = this.config.api_profiles.length <= 1;
+  }
+
+  private createApiProfile(
+    name: string,
+    values: Partial<ApiProfileFormValues> = {}
+  ): ApiProfile {
+    return {
+      id: this.createApiProfileId(),
+      name,
+      api_key: values.apiKey || "",
+      api_base: values.apiBase || "",
+      proxy_url: values.proxyUrl || "",
+      generation_api_mode: normalizeGenerationApiMode(values.apiMode),
+      last_model: values.model || DEFAULT_GENERATION_MODEL,
+      video_api_key: values.videoApiKey || "",
+      video_api_base: values.videoApiBase || "",
+      video_proxy_url: values.videoProxyUrl || "",
+      video_model: values.videoModel || DEFAULT_VIDEO_MODEL,
+      video_api_mode: normalizeVideoApiMode(values.videoApiMode),
+      prompt_optimizer_api_key: values.promptOptimizerApiKey || "",
+      prompt_optimizer_api_base:
+        values.promptOptimizerApiBase || DEFAULT_PROMPT_OPTIMIZER_API_BASE,
+      prompt_optimizer_model:
+        values.promptOptimizerModel || DEFAULT_PROMPT_OPTIMIZER_MODEL,
+      prompt_optimizer_vision: Boolean(values.promptOptimizerVision),
+    };
+  }
+
+  private createApiProfileId(): string {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return `api-${crypto.randomUUID()}`;
+    }
+    return `api-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private uniqueApiProfileId(baseId: string, usedIds: Set<string>): string {
+    const cleanBase = baseId.trim() || "api-profile";
+    if (!usedIds.has(cleanBase)) {
+      return cleanBase;
+    }
+    let index = 2;
+    while (usedIds.has(`${cleanBase}-${index}`)) {
+      index += 1;
+    }
+    return `${cleanBase}-${index}`;
+  }
+
+  private clearApiCheckStatuses(): void {
+    this.els.generationApiCheckStatus.className = "config-check-status";
+    this.els.generationApiCheckStatus.textContent = "";
+    this.els.generationApiCheckStatus.title = "";
+    this.els.videoApiCheckStatus.className = "config-check-status";
+    this.els.videoApiCheckStatus.textContent = "";
+    this.els.videoApiCheckStatus.title = "";
+    this.els.promptOptimizerApiCheckStatus.className = "config-check-status";
+    this.els.promptOptimizerApiCheckStatus.textContent = "";
+    this.els.promptOptimizerApiCheckStatus.title = "";
+  }
+
+  private switchApiProfile(profileId: string): void {
+    if (!this.config) return;
+    if (!this.config.api_profiles.some((profile) => profile.id === profileId)) {
+      this.renderApiProfiles();
+      return;
+    }
+    if (this.config.active_api_profile_id === profileId) {
+      this.renderApiProfiles();
+      return;
+    }
+
+    this.writeFormToActiveProfile();
+    this.config.active_api_profile_id = profileId;
+    this.syncActiveProfileToLegacyConfig();
+    this.renderApiProfiles();
+    this.applyProfileToForm(this.getActiveApiProfile());
+    this.els.toolbarStatus.textContent = `已切换 API：${this.getActiveApiProfile().name}`;
+  }
+
+  private renameActiveApiProfile(name: string): void {
+    if (!this.config) return;
+    const profile = this.getActiveApiProfile();
+    profile.name = name;
+    const selectionStart = this.els.profileName.selectionStart;
+    const selectionEnd = this.els.profileName.selectionEnd;
+    this.renderApiProfiles();
+    this.els.profileName.focus();
+    this.els.profileName.setSelectionRange(selectionStart, selectionEnd);
+  }
+
+  private addApiProfile(): void {
+    if (!this.config) return;
+    this.writeFormToActiveProfile();
+    const profileNumber = this.config.api_profiles.length + 1;
+    const profile = this.createApiProfile(`API 配置 ${profileNumber}`);
+    this.config.api_profiles.push(profile);
+    this.config.active_api_profile_id = profile.id;
+    this.syncActiveProfileToLegacyConfig();
+    this.renderApiProfiles();
+    this.applyProfileToForm(profile);
+    this.els.profileName.focus();
+    this.els.profileName.select();
+    this.els.toolbarStatus.textContent = "已新增 API 配置";
+  }
+
+  private duplicateApiProfile(): void {
+    if (!this.config) return;
+    this.writeFormToActiveProfile();
+    const source = this.getActiveApiProfile();
+    const profile = {
+      ...source,
+      id: this.createApiProfileId(),
+      name: `${source.name || "API 配置"} 副本`,
+    };
+    this.config.api_profiles.push(profile);
+    this.config.active_api_profile_id = profile.id;
+    this.syncActiveProfileToLegacyConfig();
+    this.renderApiProfiles();
+    this.applyProfileToForm(profile);
+    this.els.profileName.focus();
+    this.els.profileName.select();
+    this.els.toolbarStatus.textContent = "已复制 API 配置";
+  }
+
+  private deleteApiProfile(): void {
+    if (!this.config || this.config.api_profiles.length <= 1) return;
+    const activeProfile = this.getActiveApiProfile();
+    const ok = window.confirm(`删除 API 配置「${activeProfile.name}」？`);
+    if (!ok) {
+      this.renderApiProfiles();
+      return;
+    }
+
+    const oldIndex = this.config.api_profiles.findIndex(
+      (profile) => profile.id === activeProfile.id
+    );
+    this.config.api_profiles = this.config.api_profiles.filter(
+      (profile) => profile.id !== activeProfile.id
+    );
+    const nextIndex = Math.min(Math.max(oldIndex, 0), this.config.api_profiles.length - 1);
+    const nextProfile = this.config.api_profiles[nextIndex];
+    this.config.active_api_profile_id = nextProfile.id;
+    this.syncActiveProfileToLegacyConfig();
+    this.renderApiProfiles();
+    this.applyProfileToForm(nextProfile);
+    this.els.toolbarStatus.textContent = "已删除 API 配置";
+  }
+
+  private syncConfigFromForm(): UserConfig | null {
+    if (!this.config) return null;
+    this.writeFormToActiveProfile();
+    this.config.last_style = this.els.style.value;
+    this.config.last_ratio = this.els.ratio.value;
+    this.config.last_resolution = this.els.resolution.value;
+    this.config.last_count = parseClampedInt(this.els.count.value, 1, 1, 4);
+    this.config.save_dir = this.els.saveDir.value;
+    this.config.ffmpeg_path = this.els.ffmpegPath.value.trim();
+    this.config.ffprobe_path = this.els.ffprobePath.value.trim();
+    this.config.prompt_history = [...this.promptHistory];
+    return this.config;
   }
 
   private bindEvents(): void {
     this.els.optimizePrompt.addEventListener("click", () => {
       this.handleOptimizePrompt();
+    });
+
+    this.els.activeApiProfile.addEventListener("change", () => {
+      this.switchApiProfile(this.els.activeApiProfile.value);
+    });
+
+    this.els.profileName.addEventListener("input", () => {
+      this.renameActiveApiProfile(this.els.profileName.value);
+    });
+
+    [
+      this.els.apiKey,
+      this.els.apiBase,
+      this.els.proxyUrl,
+      this.els.model,
+      this.els.videoApiKey,
+      this.els.videoApiBase,
+      this.els.videoProxyUrl,
+      this.els.videoModel,
+      this.els.videoApiMode,
+      this.els.promptOptimizerApiKey,
+      this.els.promptOptimizerApiBase,
+      this.els.promptOptimizerModel,
+    ].forEach((input) => {
+      input.addEventListener("input", () => this.syncActiveApiProfileFromForm());
+    });
+    this.els.promptOptimizerVision.addEventListener("change", () => {
+      this.syncActiveApiProfileFromForm();
+    });
+    this.els.generationApiMode.addEventListener("change", () => {
+      this.syncActiveApiProfileFromForm();
+    });
+    this.els.videoApiMode.addEventListener("change", () => {
+      this.syncActiveApiProfileFromForm();
+    });
+
+    this.els.addApiProfile.addEventListener("click", () => {
+      this.addApiProfile();
+    });
+
+    this.els.duplicateApiProfile.addEventListener("click", () => {
+      this.duplicateApiProfile();
+    });
+
+    this.els.deleteApiProfile.addEventListener("click", () => {
+      this.deleteApiProfile();
+    });
+
+    this.els.importConfig.addEventListener("click", () => {
+      this.handleImportConfig();
+    });
+
+    this.els.exportConfig.addEventListener("click", () => {
+      this.handleExportConfig();
     });
 
     // API Key 显示/隐藏
@@ -396,20 +926,18 @@ export class GeneratorPage {
       this.handleCheckGenerationApi();
     });
 
+    this.els.checkVideoApi.addEventListener("click", () => {
+      this.handleCheckVideoApi();
+    });
+
     this.els.checkPromptOptimizerApi.addEventListener("click", () => {
       this.handleCheckPromptOptimizerApi();
     });
 
-    // 浏览保存目录
-    this.els.browseDir.addEventListener("click", async () => {
-      try {
-        const dir = await selectDirectory();
-        if (dir) {
-          this.els.saveDir.value = dir;
-        }
-      } catch (_) {
-        // 用户取消
-      }
+    this.els.settingsTabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        this.showSettingsTab(tab.dataset.settingsTab || "profiles");
+      });
     });
 
     this.els.pickReferenceImage.addEventListener("click", () => {
@@ -520,11 +1048,8 @@ export class GeneratorPage {
     this.els.toSprite.addEventListener("click", () => {
       if (!this.canRunGeneratorAction("sendToSprite")) return;
       // 切换到序列帧标签页
-      const spriteTab = document.querySelector<HTMLButtonElement>(
-        '.tab-button[data-tab="sprite"]'
-      );
-      spriteTab?.click();
-      document.dispatchEvent(new CustomEvent("spriteanimte:prepare-sprite-from-generator"));
+      clickTab("sprite");
+      dispatchPrepareSpriteFromGenerator();
     });
 
     this.els.addRecord.addEventListener("click", () => {
@@ -551,6 +1076,10 @@ export class GeneratorPage {
   /// 打开设置弹窗
   private openSettings(): void {
     if (!this.canRunGeneratorAction("openSettings")) return;
+    const activeTab = this.els.settingsTabs.find((tab) =>
+      tab.classList.contains("active")
+    );
+    this.showSettingsTab(activeTab?.dataset.settingsTab || "profiles");
     this.els.modalOverlay.style.display = "flex";
   }
 
@@ -582,6 +1111,23 @@ export class GeneratorPage {
     });
   }
 
+  private showSettingsTab(tabName: string): void {
+    const hasTab = this.els.settingsTabs.some(
+      (tab) => tab.dataset.settingsTab === tabName
+    );
+    const nextTab = hasTab ? tabName : "profiles";
+    this.els.settingsTabs.forEach((tab) => {
+      const active = tab.dataset.settingsTab === nextTab;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    this.els.settingsPanels.forEach((panel) => {
+      const active = panel.dataset.settingsPanel === nextTab;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+  }
+
   private async loadWorkbenchRecords(): Promise<void> {
     try {
       const dtos = await readWorkbenchRecords(200);
@@ -603,7 +1149,8 @@ export class GeneratorPage {
     if (!this.canRunGeneratorAction("editGenerationParams")) return;
     try {
       const file = await openImageFile();
-      this.setReferenceImage(file.file_path, file.file_name);
+      const imported = await importImageToLibrary(file.file_path);
+      this.setReferenceImage(imported.file_path, imported.file_name || file.file_name);
       this.els.toolbarStatus.textContent = "已选择参考图";
     } catch (err) {
       if (!String(err).includes("用户取消")) {
@@ -613,32 +1160,113 @@ export class GeneratorPage {
     }
   }
 
+  private async handleImportConfig(): Promise<void> {
+    if (this.els.importConfig.disabled) return;
+    const ok = window.confirm("导入配置会替换当前所有设置。继续？");
+    if (!ok) return;
+
+    const originalText = this.els.importConfig.textContent || "导入配置";
+    this.els.importConfig.disabled = true;
+    this.els.importConfig.textContent = "导入中";
+    this.els.toolbarStatus.textContent = "正在导入配置...";
+
+    try {
+      const result = await importConfig();
+      this.config = result.config;
+      this.normalizeApiProfiles();
+      this.promptHistory = Array.isArray(this.config.prompt_history)
+        ? [...this.config.prompt_history]
+        : await getPromptHistory(100);
+      this.historyIndex = this.promptHistory.length;
+      this.applyConfig();
+      this.syncWorkflowControls();
+      this.els.toolbarStatus.textContent = `配置已导入：${getFileName(result.file_path) || result.file_path}`;
+    } catch (err) {
+      if (String(err).includes("用户取消")) {
+        this.els.toolbarStatus.textContent = "已取消导入";
+      } else {
+        console.error("[generator] 导入配置失败:", err);
+        this.els.toolbarStatus.textContent = "导入配置失败";
+      }
+    } finally {
+      this.els.importConfig.textContent = originalText;
+      this.syncWorkflowControls();
+    }
+  }
+
+  private async handleExportConfig(): Promise<void> {
+    if (this.els.exportConfig.disabled || !this.config) return;
+
+    const originalText = this.els.exportConfig.textContent || "导出配置";
+    this.els.exportConfig.disabled = true;
+    this.els.exportConfig.textContent = "导出中";
+    this.els.toolbarStatus.textContent = "正在导出配置...";
+
+    try {
+      this.promptHistory = await getPromptHistory(100);
+      const config = this.syncConfigFromForm();
+      if (!config) return;
+      const result = await exportConfig(config);
+      this.els.toolbarStatus.textContent = `配置已导出：${getFileName(result.file_path) || result.file_path}`;
+    } catch (err) {
+      if (String(err).includes("用户取消")) {
+        this.els.toolbarStatus.textContent = "已取消导出";
+      } else {
+        console.error("[generator] 导出配置失败:", err);
+        this.els.toolbarStatus.textContent = "导出配置失败";
+      }
+    } finally {
+      this.els.exportConfig.textContent = originalText;
+      this.syncWorkflowControls();
+    }
+  }
+
   private async handleCheckGenerationApi(): Promise<void> {
     await this.runApiCheck(
       this.els.checkGenerationApi,
       this.els.generationApiCheckStatus,
-      () => checkGenerationApi(
-        this.els.apiKey.value.trim(),
-        this.els.apiBase.value.trim(),
-        this.els.model.value.trim(),
-        this.els.proxyUrl.value.trim()
-      )
+      async () => {
+        await this.saveCurrentConfig();
+        return checkGenerationApi(
+          this.els.apiKey.value.trim(),
+          this.els.apiBase.value.trim(),
+          this.els.model.value.trim(),
+          this.els.proxyUrl.value.trim()
+        );
+      }
+    );
+  }
+
+  private async handleCheckVideoApi(): Promise<void> {
+    await this.runApiCheck(
+      this.els.checkVideoApi,
+      this.els.videoApiCheckStatus,
+      async () => {
+        await this.saveCurrentConfig();
+        return checkGenerationApi(
+          this.els.videoApiKey.value.trim() || this.els.apiKey.value.trim(),
+          this.els.videoApiBase.value.trim() || this.els.apiBase.value.trim(),
+          this.els.videoModel.value.trim() || DEFAULT_VIDEO_MODEL,
+          this.els.videoProxyUrl.value.trim() || this.els.proxyUrl.value.trim()
+        );
+      }
     );
   }
 
   private async handleCheckPromptOptimizerApi(): Promise<void> {
-    const apiKey = this.els.promptOptimizerApiKey.value.trim() || this.els.apiKey.value.trim();
-    const apiBase = this.els.promptOptimizerApiBase.value.trim() || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
-    const model = this.els.promptOptimizerModel.value.trim() || DEFAULT_PROMPT_OPTIMIZER_MODEL;
     await this.runApiCheck(
       this.els.checkPromptOptimizerApi,
       this.els.promptOptimizerApiCheckStatus,
-      () => checkPromptOptimizerApi(
-        apiKey,
-        apiBase,
-        model,
-        this.els.proxyUrl.value.trim()
-      )
+      async () => {
+        await this.saveCurrentConfig();
+        const { apiKey, apiBase, model } = this.getPromptOptimizerSettings();
+        return checkPromptOptimizerApi(
+          apiKey,
+          apiBase,
+          model,
+          this.els.proxyUrl.value.trim()
+        );
+      }
     );
   }
 
@@ -709,11 +1337,12 @@ export class GeneratorPage {
     if (!this.canRunGeneratorAction("addRecord")) return;
     try {
       const file = await openImageFile();
+      const imported = await importImageToLibrary(file.file_path);
       const now = new Date();
       const record: GeneratedImageRecord = {
         id: `manual-${Date.now()}`,
-        path: file.file_path,
-        label: stripFileExtension(file.file_name) || "本地图片",
+        path: imported.file_path,
+        label: stripFileExtension(imported.file_name || file.file_name) || "本地图片",
         prompt: "",
         model: "手动添加",
         createdAt: now,
@@ -904,8 +1533,8 @@ export class GeneratorPage {
     try {
       const result = await applyCanvasBackgroundTransparent(
         canvas.toDataURL("image/png"),
-        normalizeSliderValue(this.els.mattingTolerance.value, 36, 1, 120),
-        normalizeSliderValue(this.els.mattingFeather.value, 1, 0, 3),
+        parseClampedInt(this.els.mattingTolerance.value, 36, 1, 120),
+        parseClampedInt(this.els.mattingFeather.value, 1, 0, 3),
         this.els.mattingColorKey.value
       );
       await this.drawMattingBase64ToCanvas(result.base64_data);
@@ -980,8 +1609,8 @@ export class GeneratorPage {
       height: imageData.height,
       startX: point.x,
       startY: point.y,
-      tolerance: normalizeSliderValue(this.els.mattingClickTolerance.value, 28, 1, 120),
-      radius: normalizeSliderValue(this.els.mattingClickRadius.value, 1, 0, 8),
+      tolerance: parseClampedInt(this.els.mattingClickTolerance.value, 28, 1, 120),
+      radius: parseClampedInt(this.els.mattingClickRadius.value, 1, 0, 8),
     });
     if (result.erasedPixels === 0) {
       this.els.toolbarStatus.textContent = getEraseFailureText(result.reason);
@@ -1088,16 +1717,22 @@ export class GeneratorPage {
       return;
     }
 
-    const apiKey = this.els.promptOptimizerApiKey.value.trim() || this.els.apiKey.value.trim();
+    const { apiKey, apiBase, model } = this.getPromptOptimizerSettings();
     if (!apiKey) {
       alert("请先在设置中填写提示词优化 API Key，或填写生图 API Key 以复用");
       return;
     }
 
-    const apiBase = this.els.promptOptimizerApiBase.value.trim() || DEFAULT_PROMPT_OPTIMIZER_API_BASE;
-    const model = this.els.promptOptimizerModel.value.trim() || DEFAULT_PROMPT_OPTIMIZER_MODEL;
     if (!model) {
       alert("请填写提示词优化模型");
+      return;
+    }
+
+    try {
+      await this.saveCurrentConfig();
+    } catch (err) {
+      console.error("[generator] 优化前保存配置失败:", err);
+      alert(`保存当前 API 配置失败:\n${getErrorMessage(err)}`);
       return;
     }
 
@@ -1159,12 +1794,17 @@ export class GeneratorPage {
     console.log("[generator] handleGenerate 开始, isGenerating:", this.isGenerating);
     if (!this.canRunGeneratorAction("generate")) return;
 
-    const apiKey = this.els.apiKey.value.trim();
+    const apiSettings = this.getActiveApiSettings();
+    const apiKey = apiSettings.apiKey.trim();
     const prompt = this.els.prompt.value.trim();
     console.log("[generator] apiKey长度:", apiKey.length, "prompt长度:", prompt.length);
 
     if (!apiKey) {
       alert("请输入API Key");
+      return;
+    }
+    if (!apiSettings.model.trim()) {
+      alert("请输入生图模型名称");
       return;
     }
     if (!prompt) {
@@ -1177,16 +1817,19 @@ export class GeneratorPage {
     this.startGenerationTimer();
 
     // 构建参数
-    const apiBase = this.els.apiBase.value.trim();
+    const apiBase = apiSettings.apiBase.trim();
     const negPrompt = this.els.negPrompt.value.trim();
-    const model = this.els.model.value;
+    const model = apiSettings.model.trim();
+    const apiMode = normalizeGenerationApiMode(apiSettings.apiMode);
     const style = this.els.style.value;
     const ratio = this.els.ratio.value;
     const resolution = this.els.resolution.value;
-    const count = normalizeCount(this.els.count.value);
+    const count = parseClampedInt(this.els.count.value, 1, 1, 4);
     this.expectedImageCount = count;
 
     try {
+      await this.saveCurrentConfig();
+
       // 生成前先保存提示词历史；历史失败不应阻塞图片生成。
       try {
         console.log("[generator] 即将调用 addPromptHistory");
@@ -1211,6 +1854,7 @@ export class GeneratorPage {
         ratio,
         resolution,
         count,
+        apiMode,
         hasReferenceImage: Boolean(this.referenceImagePath),
       });
       const result: GenerationResult = await generateImage(
@@ -1224,18 +1868,14 @@ export class GeneratorPage {
         ratio,
         resolution,
         count,
+        apiMode,
         this.referenceImagePath
       );
 
       // 显示结果
       await this.addResultsToWorkbench(result, { prompt, model });
 
-      try {
-        await this.saveCurrentConfig();
-      } catch (saveErr) {
-        console.error("[generator] 生成完成但保存配置失败:", saveErr);
-        this.els.toolbarStatus.textContent = "生成完成，配置保存失败";
-      }
+      this.els.toolbarStatus.textContent = this.els.toolbarStatus.textContent || "生成完成";
     } catch (err) {
       console.error("[generator] 生成失败:", err);
       const elapsed = this.getElapsedText();
@@ -1443,10 +2083,10 @@ export class GeneratorPage {
   }
 
   private renderGallery(): void {
-    this.els.resultGrid.innerHTML = "";
     this.els.galleryCount.textContent = `${this.generatedRecords.length} 张`;
 
     if (this.generatedRecords.length === 0) {
+      this.els.resultGrid.innerHTML = "";
       this.selectedGeneratedPath = null;
       this.mattingDirty = false;
       this.mattingCanvasPath = null;
@@ -1462,54 +2102,20 @@ export class GeneratorPage {
     this.els.workspaceEmpty.style.display = "none";
     this.els.resultCard.style.display = "flex";
 
-    this.generatedRecords.forEach((record, i) => {
-      const item = document.createElement("div");
-      item.className = "image-item";
-      item.dataset.path = record.path;
-      if (record.path === this.selectedGeneratedPath) {
-        item.classList.add("selected");
-      }
-      item.tabIndex = 0;
-
-      const img = document.createElement("img");
-      const assetSrc = convertFileSrc(record.path);
-      let triedAssetFallback = false;
-      img.src = assetSrc;
-      img.alt = `生成图片 ${i + 1}`;
-      img.loading = "lazy";
-      img.onerror = () => {
-        if (!triedAssetFallback) {
-          triedAssetFallback = true;
-          img.src = assetSrc;
-        }
-      };
-
-      const meta = document.createElement("div");
-      meta.className = "image-meta";
-      const timeRow = document.createElement("span");
-      timeRow.textContent = formatTime(record.createdAt);
-      const durationRow = document.createElement("span");
-      durationRow.textContent = `耗时 ${formatDuration(record.durationSeconds)}`;
-      meta.appendChild(timeRow);
-      meta.appendChild(durationRow);
-
-      item.appendChild(img);
-      item.appendChild(meta);
-      item.addEventListener("click", () => this.selectGeneratedImage(record.path));
-      item.addEventListener("dblclick", () => {
+    renderGeneratedGallery({
+      container: this.els.resultGrid,
+      records: this.generatedRecords,
+      selectedPath: this.selectedGeneratedPath,
+      formatTime,
+      formatDuration,
+      onSelect: (path) => this.selectGeneratedImage(path),
+      onOpen: (path) => {
         if (!this.canRunGeneratorAction("openSelected")) return;
-        openImageFilePath(record.path).catch((err) => {
+        openImageFilePath(path).catch((err) => {
           console.error("[generator] 打开图片失败:", err);
           this.els.toolbarStatus.textContent = "打开图片失败";
         });
-      });
-      item.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          this.selectGeneratedImage(record.path);
-        }
-      });
-      this.els.resultGrid.appendChild(item);
+      },
     });
 
     if (!this.selectedGeneratedPath || !this.generatedRecords.some((item) => item.path === this.selectedGeneratedPath)) {
@@ -1548,51 +2154,37 @@ export class GeneratorPage {
   }
 
   private updateGallerySelection(): void {
-    this.els.resultGrid.querySelectorAll<HTMLElement>(".image-item").forEach((item) => {
-      item.classList.toggle("selected", item.dataset.path === this.selectedGeneratedPath);
-    });
+    updateGeneratedGallerySelection(this.els.resultGrid, this.selectedGeneratedPath);
   }
 
   private updateSelectedPreview(): void {
     const record = this.generatedRecords.find((item) => item.path === this.selectedGeneratedPath);
-    if (!record) {
-      this.els.selectedMeta.textContent = "未选择图片";
-      this.els.selectedImage.removeAttribute("src");
-      return;
-    }
-
-    const assetSrc = convertFileSrc(record.path);
-    let triedAssetFallback = false;
-    this.els.selectedImage.src = assetSrc;
-    this.els.selectedImage.onerror = () => {
-      if (!triedAssetFallback) {
-        triedAssetFallback = true;
-        this.els.selectedImage.src = assetSrc;
-      }
-    };
-    this.els.selectedMeta.textContent =
-      `${record.label} · ${record.model || "未知模型"} · ${formatTime(record.createdAt)} · 耗时 ${formatDuration(record.durationSeconds)}`;
+    setSelectedGeneratedPreview({
+      image: this.els.selectedImage,
+      meta: this.els.selectedMeta,
+      record: record || null,
+      formatTime,
+      formatDuration,
+    });
   }
 
   private async saveCurrentConfig(): Promise<void> {
     if (!this.config) return;
     console.log("[generator] 保存配置...");
-    this.config.api_key = this.els.apiKey.value.trim();
-    this.config.api_base = this.els.apiBase.value.trim();
-    this.config.proxy_url = this.els.proxyUrl.value.trim();
-    this.config.last_model = this.els.model.value.trim();
-    this.config.prompt_optimizer_api_key = this.els.promptOptimizerApiKey.value.trim();
-    this.config.prompt_optimizer_api_base = this.els.promptOptimizerApiBase.value.trim();
-    this.config.prompt_optimizer_model = this.els.promptOptimizerModel.value.trim();
-    this.config.prompt_optimizer_vision = this.els.promptOptimizerVision.checked;
-    this.config.last_style = this.els.style.value;
-    this.config.last_ratio = this.els.ratio.value;
-    this.config.last_resolution = this.els.resolution.value;
-    this.config.last_count = normalizeCount(this.els.count.value);
-    this.config.save_dir = this.els.saveDir.value;
-    this.config.ffmpeg_path = this.els.ffmpegPath.value.trim();
-    this.config.ffprobe_path = this.els.ffprobePath.value.trim();
-    await saveConfig(this.config);
+    this.promptHistory = await getPromptHistory(100);
+    this.historyIndex = this.promptHistory.length;
+    const config = this.syncConfigFromForm();
+    if (config) {
+      await saveConfig(config);
+    }
+  }
+
+  private getPromptOptimizerSettings(): PromptOptimizerSettings {
+    return {
+      apiKey: this.els.promptOptimizerApiKey.value.trim() || this.els.apiKey.value.trim(),
+      apiBase: this.els.promptOptimizerApiBase.value.trim() || DEFAULT_PROMPT_OPTIMIZER_API_BASE,
+      model: this.els.promptOptimizerModel.value.trim() || DEFAULT_PROMPT_OPTIMIZER_MODEL,
+    };
   }
 
   private syncWorkflowControls(): void {
@@ -1649,8 +2241,19 @@ export class GeneratorPage {
       this.els.apiKey,
       this.els.apiBase,
       this.els.proxyUrl,
+      this.els.generationApiMode,
+      this.els.activeApiProfile,
+      this.els.profileName,
+      this.els.addApiProfile,
+      this.els.duplicateApiProfile,
       this.els.model,
       this.els.checkGenerationApi,
+      this.els.videoApiKey,
+      this.els.videoApiBase,
+      this.els.videoProxyUrl,
+      this.els.videoModel,
+      this.els.videoApiMode,
+      this.els.checkVideoApi,
       this.els.promptOptimizerApiKey,
       this.els.promptOptimizerApiBase,
       this.els.promptOptimizerModel,
@@ -1659,12 +2262,15 @@ export class GeneratorPage {
       this.els.saveDir,
       this.els.ffmpegPath,
       this.els.ffprobePath,
-      this.els.browseDir,
       this.els.toggleKey,
       this.els.saveConfig,
+      this.els.importConfig,
+      this.els.exportConfig,
     ].forEach((control) => {
       control.disabled = !permissions.openSettings;
     });
+    this.els.deleteApiProfile.disabled =
+      !permissions.openSettings || (this.config?.api_profiles.length || 0) <= 1;
   }
 
   /// 获取最近一次生成的图片路径
@@ -1696,21 +2302,40 @@ function setSelectValue(sel: HTMLSelectElement, value: string): void {
   }
 }
 
-function getDirectoryName(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const index = normalized.lastIndexOf("/");
-  return index > 0 ? path.slice(0, index) : "";
+function normalizeGenerationApiMode(value: string | undefined): string {
+  const normalized = (value || "").trim().toLowerCase();
+  if (
+    normalized === "chat_completions" ||
+    normalized === "chat-completions" ||
+    normalized === "chat/completions"
+  ) {
+    return "chat_completions";
+  }
+  return DEFAULT_GENERATION_API_MODE;
 }
 
-function getFileName(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const index = normalized.lastIndexOf("/");
-  return index >= 0 ? normalized.slice(index + 1) : normalized;
-}
-
-function stripFileExtension(fileName: string): string {
-  const index = fileName.lastIndexOf(".");
-  return index > 0 ? fileName.slice(0, index) : fileName;
+function normalizeVideoApiMode(value: string | undefined): string {
+  const normalized = (value || "").trim().toLowerCase();
+  if (
+    normalized === "videos" ||
+    normalized === "video" ||
+    normalized === "/videos" ||
+    normalized === "v1/videos" ||
+    normalized === "/v1/videos"
+  ) {
+    return "videos";
+  }
+  if (
+    normalized === "chat_completions" ||
+    normalized === "chat-completions" ||
+    normalized === "chat/completions" ||
+    normalized === "/chat/completions" ||
+    normalized === "v1/chat/completions" ||
+    normalized === "/v1/chat/completions"
+  ) {
+    return "chat_completions";
+  }
+  return DEFAULT_VIDEO_API_MODE;
 }
 
 function formatTime(date: Date): string {
@@ -1785,36 +2410,11 @@ function formatRecordTime(date: Date): string {
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 }
 
-function normalizeCount(value: string): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return 1;
-  }
-  return Math.min(4, Math.max(1, parsed));
-}
-
 function normalizeGridSize(value: number, fallback: number): number {
   if (!Number.isFinite(value)) {
     return fallback;
   }
   return Math.min(20, Math.max(1, Math.round(value)));
-}
-
-function normalizeSliderValue(value: string, fallback: number, min: number, max: number): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, parsed));
-}
-
-function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("图片载入失败"));
-    image.src = dataUrl;
-  });
 }
 
 function getErrorMessage(err: unknown): string {

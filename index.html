@@ -9,10 +9,185 @@
   <body>
     <!-- 标签栏 -->
     <nav class="tab-bar">
-      <button class="tab-button active" data-tab="generator">图片生成</button>
-      <button class="tab-button" data-tab="video-sprite">视频转序列帧</button>
-      <button class="tab-button" data-tab="sprite">序列帧预览</button>
+      <div class="tab-bar-tabs">
+        <button class="tab-button active" data-tab="generator">图片生成</button>
+        <button class="tab-button" data-tab="video-sprite">视频转序列帧</button>
+        <button class="tab-button" data-tab="sprite">序列帧预览</button>
+      </div>
+      <div class="tab-bar-actions">
+        <label class="toolbar-profile-switch top-profile-switch" for="active-api-profile">
+          <span>API</span>
+          <select id="active-api-profile" aria-label="切换 API 配置"></select>
+        </label>
+        <button id="btn-settings" class="btn-settings" title="设置" type="button">⚙</button>
+      </div>
     </nav>
+
+    <!-- 设置弹窗 -->
+    <div class="modal-overlay" id="settings-modal" style="display:none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>设置</h2>
+          <button id="btn-close-modal" class="btn-close-modal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-tabs" role="tablist" aria-label="设置分类">
+            <button class="settings-tab active" data-settings-tab="profiles" type="button" role="tab" aria-selected="true">配置组</button>
+            <button class="settings-tab" data-settings-tab="image" type="button" role="tab" aria-selected="false">图片生成</button>
+            <button class="settings-tab" data-settings-tab="video" type="button" role="tab" aria-selected="false">视频生成</button>
+            <button class="settings-tab" data-settings-tab="optimizer" type="button" role="tab" aria-selected="false">提示词优化</button>
+            <button class="settings-tab" data-settings-tab="output" type="button" role="tab" aria-selected="false">输出与工具</button>
+          </div>
+
+          <section class="settings-panel active" data-settings-panel="profiles" role="tabpanel">
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">API 配置组</h3>
+              <div class="form-group">
+                <label for="api-profile-name">当前配置名称</label>
+                <input type="text" id="api-profile-name" placeholder="例如 OpenAI 主账号" autocomplete="off" />
+              </div>
+              <div class="api-profile-list" id="api-profile-list"></div>
+              <div class="api-profile-actions">
+                <button id="btn-add-api-profile" class="btn-sm" type="button">新增</button>
+                <button id="btn-duplicate-api-profile" class="btn-sm" type="button">复制</button>
+                <button id="btn-delete-api-profile" class="btn-sm btn-danger-soft" type="button">删除</button>
+              </div>
+              <div class="config-file-actions">
+                <button id="btn-import-config" class="btn-sm" type="button">导入配置</button>
+                <button id="btn-export-config" class="btn-sm" type="button">导出配置</button>
+              </div>
+              <div class="config-check-status">导入/导出会处理完整配置，包括 API 配置组、模型、输出目录、工具路径和提示词历史。</div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="image" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">图片生成 API</h3>
+              <div class="form-group">
+                <label for="api-key">API Key</label>
+                <div class="input-row">
+                  <input type="password" id="api-key" placeholder="输入API密钥" autocomplete="off" />
+                  <button id="btn-toggle-key" class="btn-icon" title="显示/隐藏">👁</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="api-base">API 地址</label>
+                <input type="text" id="api-base" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="generation-api-mode">调用方式</label>
+                <select id="generation-api-mode">
+                  <option value="responses">Responses (/responses)</option>
+                  <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="model-input">图片模型</label>
+                <div class="input-row">
+                  <input type="text" id="model-input" list="model-list" placeholder="输入或选择模型" autocomplete="off" />
+                  <button id="btn-check-generation-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <datalist id="model-list"></datalist>
+                <div id="generation-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="form-group">
+                <label for="proxy-url">代理地址</label>
+                <input type="text" id="proxy-url" placeholder="留空则使用系统代理" autocomplete="off" />
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="video" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">视频生成 API</h3>
+              <div class="form-group">
+                <label for="video-api-key">视频 API Key</label>
+                <input type="password" id="video-api-key" placeholder="留空则复用图片生成 API Key" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="video-api-base">视频 API 地址</label>
+                <input type="text" id="video-api-base" placeholder="留空则复用图片生成 API 地址" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="video-model-input">视频模型</label>
+                <div class="input-row">
+                  <input type="text" id="video-model-input" placeholder="sora-2" autocomplete="off" />
+                  <button id="btn-check-video-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <div id="video-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="form-group">
+                <label for="video-api-mode">调用方式</label>
+                <select id="video-api-mode">
+                  <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                  <option value="videos">Videos (/videos)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="video-proxy-url">视频代理地址</label>
+                <input type="text" id="video-proxy-url" placeholder="留空则复用图片生成代理" autocomplete="off" />
+              </div>
+              <div class="config-check-status">Key、地址或代理留空时会复用图片生成配置；如果服务提示使用 /v1/videos，请选择 Videos 调用方式。</div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="optimizer" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">提示词优化 LLM</h3>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-key">优化 API Key</label>
+                <input type="password" id="prompt-optimizer-api-key" placeholder="留空则复用生图 API Key" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-base">优化 API 地址</label>
+                <input type="text" id="prompt-optimizer-api-base" placeholder="https://api.deepseek.com" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-model-input">优化模型</label>
+                <div class="input-row">
+                  <input type="text" id="prompt-optimizer-model-input" list="model-list" placeholder="deepseek-v4-flash" autocomplete="off" />
+                  <button id="btn-check-prompt-optimizer-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <div id="prompt-optimizer-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-row" for="prompt-optimizer-vision">
+                  <input type="checkbox" id="prompt-optimizer-vision" />
+                  <span>优化时理解参考图</span>
+                </label>
+                <div class="config-check-status">开启后，存在参考图时会把参考图发送给提示词优化模型。</div>
+                <div class="config-check-status">如果模型不支持图片输入，会自动降级为不传图的参考图复刻模式。</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="output" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">输出</h3>
+              <div class="form-group">
+                <label for="save-dir-input">素材库目录</label>
+                <input type="text" id="save-dir-input" placeholder="应用旁 SpriteAnimteData/assets" readonly />
+                <div class="config-check-status">生成图片、生成视频、导入素材、抠图结果、序列帧图和导出动画会按类型保存到应用旁数据目录。</div>
+              </div>
+            </div>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">视频处理</h3>
+              <div class="form-group">
+                <label for="ffmpeg-path">FFmpeg 路径</label>
+                <input type="text" id="ffmpeg-path" placeholder="留空则自动检测，或选择 ffmpeg 可执行文件路径" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="ffprobe-path">FFprobe 路径</label>
+                <input type="text" id="ffprobe-path" placeholder="可选；留空则使用 ffmpeg 同目录或自动检测" autocomplete="off" />
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-save-config" class="btn-primary">💾 保存配置</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ==================== 图片生成页面（工作台布局） ==================== -->
     <main id="page-generator" class="page active">
@@ -26,7 +201,6 @@
           <span class="progress-text" id="progress-text">准备中...</span>
         </div>
         <span class="toolbar-status" id="toolbar-status">就绪</span>
-        <button id="btn-settings" class="btn-settings" title="设置" type="button">⚙</button>
       </div>
 
       <!-- 主工作区 -->
@@ -166,109 +340,47 @@
         </section>
       </div>
 
-      <!-- 设置弹窗 -->
-      <div class="modal-overlay" id="settings-modal" style="display:none">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>设置</h2>
-            <button id="btn-close-modal" class="btn-close-modal">✕</button>
-          </div>
-          <div class="modal-body">
-            <div class="sidebar-section">
-              <h3 class="sidebar-section-title">API 与模型</h3>
-              <div class="form-group">
-                <label for="api-key">API Key</label>
-                <div class="input-row">
-                  <input type="password" id="api-key" placeholder="输入API密钥" autocomplete="off" />
-                  <button id="btn-toggle-key" class="btn-icon" title="显示/隐藏">👁</button>
-                </div>
-              </div>
-              <div class="form-group">
-                <label for="api-base">API 地址</label>
-                <input type="text" id="api-base" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label for="model-input">模型</label>
-                <div class="input-row">
-                  <input type="text" id="model-input" list="model-list" placeholder="输入或选择模型" autocomplete="off" />
-                  <button id="btn-check-generation-api" class="btn-sm" type="button">检测</button>
-                </div>
-                <datalist id="model-list"></datalist>
-                <div id="generation-api-check-status" class="config-check-status" aria-live="polite"></div>
-              </div>
-              <div class="form-group">
-                <label for="proxy-url">代理地址</label>
-                <input type="text" id="proxy-url" placeholder="留空则使用系统代理" autocomplete="off" />
-              </div>
-            </div>
-            <div class="sidebar-section">
-              <h3 class="sidebar-section-title">提示词优化 LLM</h3>
-              <div class="form-group">
-                <label for="prompt-optimizer-api-key">优化 API Key</label>
-                <input type="password" id="prompt-optimizer-api-key" placeholder="留空则复用生图 API Key" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label for="prompt-optimizer-api-base">优化 API 地址</label>
-                <input type="text" id="prompt-optimizer-api-base" placeholder="https://api.deepseek.com" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label for="prompt-optimizer-model-input">优化模型</label>
-                <div class="input-row">
-                  <input type="text" id="prompt-optimizer-model-input" list="model-list" placeholder="deepseek-v4-flash" autocomplete="off" />
-                  <button id="btn-check-prompt-optimizer-api" class="btn-sm" type="button">检测</button>
-                </div>
-                <div id="prompt-optimizer-api-check-status" class="config-check-status" aria-live="polite"></div>
-              </div>
-              <div class="form-group">
-                <label class="checkbox-row" for="prompt-optimizer-vision">
-                  <input type="checkbox" id="prompt-optimizer-vision" />
-                  <span>优化时理解参考图</span>
-                </label>
-                <div class="config-check-status">开启后，存在参考图时会把参考图发送给提示词优化模型。</div>
-                <div class="config-check-status">如果模型不支持图片输入，会自动降级为不传图的参考图复刻模式。</div>
-              </div>
-            </div>
-            <div class="sidebar-section">
-              <h3 class="sidebar-section-title">输出</h3>
-              <div class="form-group">
-                <label for="save-dir-input">保存目录</label>
-                <div class="input-row">
-                  <input type="text" id="save-dir-input" placeholder="选择保存目录" readonly />
-                  <button id="btn-browse-dir" class="btn-sm">📁</button>
-                </div>
-              </div>
-            </div>
-            <div class="sidebar-section">
-              <h3 class="sidebar-section-title">视频处理</h3>
-              <div class="form-group">
-                <label for="ffmpeg-path">FFmpeg 路径</label>
-                <input type="text" id="ffmpeg-path" placeholder="留空则自动检测，例如 /usr/bin/ffmpeg" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label for="ffprobe-path">FFprobe 路径</label>
-                <input type="text" id="ffprobe-path" placeholder="可选；留空则使用 ffmpeg 同目录或自动检测" autocomplete="off" />
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button id="btn-save-config" class="btn-primary">💾 保存配置</button>
-          </div>
-        </div>
-      </div>
     </main>
 
     <!-- ==================== 视频转序列帧页面 ==================== -->
     <main id="page-video-sprite" class="page">
       <div class="video-sprite-layout">
         <aside class="video-sprite-inspector">
-          <section class="sprite-panel">
+          <section class="sprite-panel video-source-panel">
             <div class="panel-heading">
-              <span>视频源</span>
+              <span>视频来源</span>
             </div>
-            <button id="btn-video-sprite-pick" class="btn-primary video-sprite-wide" type="button">选择视频</button>
             <div class="video-source-meta">
               <span id="video-sprite-file">未选择视频</span>
               <span id="video-sprite-duration">时长: -</span>
+            </div>
+            <div class="video-source-local-row">
+              <button id="btn-video-sprite-pick" class="btn-primary video-sprite-wide" type="button">选择本地视频</button>
+            </div>
+            <div class="video-generation-panel">
+              <label for="video-generation-prompt">提示词</label>
+              <textarea id="video-generation-prompt" rows="3" placeholder="角色动作、镜头、背景"></textarea>
+              <div class="video-generation-grid">
+                <label class="region-field">
+                  <span>尺寸</span>
+                  <select id="video-generation-size">
+                    <option value="1280x720">1280x720</option>
+                    <option value="720x1280">720x1280</option>
+                    <option value="1024x1024">1024x1024</option>
+                    <option value="1792x1024">1792x1024</option>
+                    <option value="1024x1792">1024x1792</option>
+                  </select>
+                </label>
+                <label class="region-field">
+                  <span>秒数</span>
+                  <select id="video-generation-seconds">
+                    <option value="4">4</option>
+                    <option value="8">8</option>
+                    <option value="12">12</option>
+                  </select>
+                </label>
+                <button id="btn-video-generate" class="btn-secondary video-sprite-wide" type="button">AI 生成</button>
+              </div>
             </div>
           </section>
 
@@ -408,8 +520,18 @@
             <button id="btn-video-sprite-prev" class="btn-sm" type="button" disabled>上一帧</button>
             <button id="btn-video-sprite-play" class="btn-primary" type="button" disabled>播放</button>
             <button id="btn-video-sprite-next" class="btn-sm" type="button" disabled>下一帧</button>
+            <div class="video-sprite-preview-settings">
+              <div class="control-group video-sprite-source-preview-control">
+                <label for="video-sprite-source-preview-fps">预览 FPS</label>
+                <input type="number" id="video-sprite-source-preview-fps" value="6" min="1" max="30" class="input-sm" />
+              </div>
+              <div class="control-group video-sprite-source-preview-control">
+                <label for="video-sprite-source-preview-max">预览上限</label>
+                <input type="number" id="video-sprite-source-preview-max" value="72" min="2" max="240" class="input-sm" />
+              </div>
+            </div>
             <div class="control-group">
-              <label>FPS</label>
+              <label for="video-sprite-fps">播放 FPS</label>
               <input type="range" id="video-sprite-fps" min="1" max="60" value="12" />
               <span id="video-sprite-fps-label">12</span>
             </div>

@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
 # ============================================================
 # 一键运行脚本 — 开发模式自动热重载
-# 用法: ./scripts/run.sh [--dev|--release]
+# 用法: ./scripts/run.sh [--dev|--debug|--release]
+#   默认      Tauri dev 模式（Vite HMR + Rust 自动重编译重启）
 #   --dev     Tauri dev 模式（Vite HMR + Rust 自动重编译重启）
+#   --debug   构建前端 + 运行 debug 二进制
 #   --release 构建前端 + 运行 release 二进制
-#   默认      构建前端 + 运行 debug 二进制
 # ============================================================
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="$PROJECT_ROOT/.run-pids"
 LOCK_FILE="$PROJECT_ROOT/.run-lock"
 CLEANUP_DONE=false
-
-info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # ============================================================
 # 资源回收
@@ -103,13 +99,9 @@ check_deps() {
 # ============================================================
 # 主流程
 # ============================================================
-MODE="${1:-}"
+MODE="${1:---dev}"
 
-echo -e "${CYAN}"
-echo "╔══════════════════════════════════════╗"
-echo "║   SpriteAnimte — 启动中...           ║"
-echo "╚══════════════════════════════════════╝"
-echo -e "${NC}"
+banner "SpriteAnimte - 启动中..."
 
 check_deps
 check_duplicate
@@ -132,10 +124,10 @@ case "$MODE" in
     # ---- 发布模式：构建前端 + release 二进制 ----
     --release)
         info "构建前端..."
-        npx vite build 2>&1 | tail -3
+        run_vite_build 3
 
         info "编译 Rust (release)..."
-        cargo build --release --manifest-path "$PROJECT_ROOT/src-tauri/Cargo.toml" 2>&1 | tail -3
+        run_cargo_build release 3
 
         info "启动应用 (release)..."
         "$PROJECT_ROOT/src-tauri/target/release/sprite-anime" &
@@ -144,13 +136,13 @@ case "$MODE" in
         info "应用已启动 PID=$TAURI_PID"
         ;;
 
-    # ---- 默认模式：构建前端 + debug 二进制 ----
-    *)
+    # ---- debug 模式：构建前端 + debug 二进制 ----
+    --debug)
         info "构建前端..."
-        npx vite build 2>&1 | tail -3
+        run_vite_build 3
 
         info "编译 Rust (debug)..."
-        cargo build --manifest-path "$PROJECT_ROOT/src-tauri/Cargo.toml" 2>&1 | tail -3
+        run_cargo_build debug 3
 
         info "启动应用..."
         "$PROJECT_ROOT/src-tauri/target/debug/sprite-anime" &
@@ -158,10 +150,16 @@ case "$MODE" in
         echo "$TAURI_PID" > "$PID_FILE"
         info "应用已启动 PID=$TAURI_PID"
         ;;
+
+    *)
+        error "未知参数: $MODE"
+        error "用法: ./scripts/run.sh [--dev|--debug|--release]"
+        exit 1
+        ;;
 esac
 
 echo -e "${GREEN}  SpriteAnimte 运行中，按 Ctrl+C 退出${NC}"
 echo ""
 
 # 等待主进程
-wait "$TAURI_PID" 2>/dev/null || true
+wait "$TAURI_PID"

@@ -197,10 +197,12 @@ mod tests {
     fn delete_rejects_empty_id_without_removing_records() {
         let path = temp_records_file("empty-delete");
         let store = WorkbenchStore::new(path.clone());
+        let first_image = temp_records_file("one.png").to_string_lossy().to_string();
+        let second_image = temp_records_file("two.png").to_string_lossy().to_string();
         let records = vec![
             WorkbenchRecord {
                 id: String::new(),
-                path: "/tmp/one.png".into(),
+                path: first_image,
                 label: String::new(),
                 prompt: String::new(),
                 model: String::new(),
@@ -210,7 +212,7 @@ mod tests {
             },
             WorkbenchRecord {
                 id: String::new(),
-                path: "/tmp/two.png".into(),
+                path: second_image,
                 label: String::new(),
                 prompt: String::new(),
                 model: String::new(),
@@ -234,9 +236,12 @@ mod tests {
     fn delete_can_remove_normalized_legacy_empty_id_record() {
         let path = temp_records_file("legacy-delete");
         let store = WorkbenchStore::new(path.clone());
+        let image_path = temp_records_file("legacy.png")
+            .to_string_lossy()
+            .to_string();
         let records = vec![WorkbenchRecord {
             id: String::new(),
-            path: "/tmp/legacy.png".into(),
+            path: image_path,
             label: String::new(),
             prompt: String::new(),
             model: String::new(),

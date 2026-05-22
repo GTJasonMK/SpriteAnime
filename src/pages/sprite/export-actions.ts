@@ -1,17 +1,17 @@
 import {
   exportFrames,
   exportGif,
-  selectDirectory,
   type ExportFrame,
   type FrameData,
 } from "../../api/commands";
 import {
+  getDirectoryName,
   getFileName,
-  joinPath,
   sanitizePathSegment,
   stripFileExtension,
   stripGifExtension,
 } from "./utils";
+import { queryAll, queryOne } from "../../utils/dom";
 
 interface SpriteExportOptions {
   frames: FrameData[];
@@ -82,7 +82,7 @@ function requestExportOptions(defaultNames: Record<ExportMode, string>): Promise
             <input type="text" id="export-name-input" autocomplete="off" />
           </div>
           <p class="export-dialog-note" id="export-dialog-note">
-            将先选择父目录，然后创建同名文件夹，帧文件按“名称_0.png”连续命名。
+            将保存到应用旁素材库的 exported-frame-sets 目录，帧文件按“名称_0.png”连续命名。
           </p>
         </div>
         <div class="modal-footer export-dialog-footer">
@@ -92,12 +92,12 @@ function requestExportOptions(defaultNames: Record<ExportMode, string>): Promise
       </div>
     `;
 
-    const nameInput = overlay.querySelector<HTMLInputElement>("#export-name-input")!;
-    const nameLabel = overlay.querySelector<HTMLElement>("#export-name-label")!;
-    const note = overlay.querySelector<HTMLElement>("#export-dialog-note")!;
-    const modeButtons = Array.from(overlay.querySelectorAll<HTMLButtonElement>("[data-mode]"));
-    const closeButtons = Array.from(overlay.querySelectorAll<HTMLButtonElement>("[data-action='close'], [data-action='cancel']"));
-    const submitButton = overlay.querySelector<HTMLButtonElement>("[data-action='submit']")!;
+    const nameInput = queryOne<HTMLInputElement>("#export-name-input", overlay);
+    const nameLabel = queryOne<HTMLElement>("#export-name-label", overlay);
+    const note = queryOne<HTMLElement>("#export-dialog-note", overlay);
+    const modeButtons = queryAll<HTMLButtonElement>("[data-mode]", overlay);
+    const closeButtons = queryAll<HTMLButtonElement>("[data-action='close'], [data-action='cancel']", overlay);
+    const submitButton = queryOne<HTMLButtonElement>("[data-action='submit']", overlay);
 
     const setMode = (nextMode: ExportMode): void => {
       if (nextMode !== mode) {
@@ -107,8 +107,8 @@ function requestExportOptions(defaultNames: Record<ExportMode, string>): Promise
       nameInput.value = draftNames[mode];
       nameLabel.textContent = mode === "folder" ? "文件夹名称" : "GIF 文件名";
       note.textContent = mode === "folder"
-        ? "将先选择父目录，然后创建同名文件夹，帧文件按“名称_0.png”连续命名。"
-        : "将选择导出目录，并使用当前播放 FPS 生成一个 GIF 文件。";
+        ? "将保存到应用旁素材库的 exported-frame-sets 目录，帧文件按“名称_0.png”连续命名。"
+        : "将保存到应用旁素材库的 exported-gifs 目录，并使用当前播放 FPS 生成一个 GIF 文件。";
       modeButtons.forEach((button) => {
         button.classList.toggle("selected", button.dataset.mode === mode);
       });
@@ -168,11 +168,9 @@ async function exportSelectedFrameFolder(options: SpriteExportOptions, inputName
   }
 
   try {
-    const parentDir = await selectDirectory();
-    if (!parentDir) return;
-    const outputDir = joinPath(parentDir, folderName);
-    const savedPaths = await exportFrames(getSelectedExportFrames(options), outputDir, folderName);
-    alert(`成功导出 ${savedPaths.length} 个帧到 ${outputDir}`);
+    const savedPaths = await exportFrames(getSelectedExportFrames(options), folderName);
+    const outputDir = getDirectoryName(savedPaths[0] || "");
+    alert(`成功导出 ${savedPaths.length} 个帧到 ${outputDir || "应用旁素材库"}`);
   } catch (err) {
     if (String(err) !== "用户取消选择") {
       console.error("[sprite] 导出失败:", err);
@@ -189,11 +187,8 @@ async function exportSelectedGif(options: SpriteExportOptions, inputName: string
   }
 
   try {
-    const outputDir = await selectDirectory();
-    if (!outputDir) return;
     const savedPath = await exportGif(
       getSelectedExportFrames(options),
-      outputDir,
       fileName,
       options.fps
     );

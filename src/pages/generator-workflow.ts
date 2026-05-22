@@ -1,3 +1,5 @@
+import { createWorkflowActionChecker } from "./workflow-permissions";
+
 export type GeneratorWorkflowState =
   | "empty"
   | "ready"
@@ -79,8 +81,7 @@ export function getGeneratorWorkflowPermissions(
   state: GeneratorWorkflowState,
   context: GeneratorWorkflowContext
 ): GeneratorPermissions {
-  const allowed = new Set<GeneratorAction>(GENERATOR_ALLOWED_ACTIONS[state]);
-  const can = (action: GeneratorAction): boolean => allowed.has(action);
+  const can = createWorkflowActionChecker(GENERATOR_ALLOWED_ACTIONS, state);
   return {
     editGenerationParams: can("editGenerationParams"),
     optimizePrompt: can("optimizePrompt"),

@@ -1,8 +1,35 @@
 {
+  "api_profiles": [
+    {
+      "id": "default",
+      "name": "Example API",
+      "api_key": "",
+      "api_base": "https://your-image-api.example/v1",
+      "proxy_url": "",
+      "generation_api_mode": "responses",
+      "last_model": "gpt-image-2",
+      "video_api_key": "",
+      "video_api_base": "https://your-video-api.example/v1",
+      "video_proxy_url": "",
+      "video_model": "sora-2",
+      "video_api_mode": "videos",
+      "prompt_optimizer_api_key": "",
+      "prompt_optimizer_api_base": "https://api.deepseek.com",
+      "prompt_optimizer_model": "deepseek-v4-flash",
+      "prompt_optimizer_vision": false
+    }
+  ],
+  "active_api_profile_id": "default",
   "api_key": "",
-  "api_base": "https://your-relay.example/v1",
+  "api_base": "https://your-image-api.example/v1",
   "proxy_url": "",
-  "last_model": "gpt-5.3-codex",
+  "generation_api_mode": "responses",
+  "last_model": "gpt-image-2",
+  "video_api_key": "",
+  "video_api_base": "https://your-video-api.example/v1",
+  "video_proxy_url": "",
+  "video_model": "sora-2",
+  "video_api_mode": "videos",
   "last_ratio": "1:1",
   "last_resolution": "原始",
   "last_style": "anime",
@@ -10,6 +37,9 @@
   "prompt_optimizer_api_key": "",
   "prompt_optimizer_api_base": "https://api.deepseek.com",
   "prompt_optimizer_model": "deepseek-v4-flash",
+  "prompt_optimizer_vision": false,
   "save_dir": "",
+  "ffmpeg_path": "",
+  "ffprobe_path": "",
   "prompt_history": []
 }

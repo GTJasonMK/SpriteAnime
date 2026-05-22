@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
-use tauri::{command, State};
+use tauri::{command, AppHandle, State};
 
 use crate::api_client::{self, ApiCheckResult, GenerationResult, DEFAULT_API_BASE_URL};
+use crate::asset_library::{self, AssetCategory};
 use crate::config::{self, AppState, PresetsPayload, UserConfig};
-use crate::events::GenerateEvent;
+use crate::events::{GenerateEvent, VideoGenerationEvent};
 use crate::image_processor;
 use crate::logger::{GenerationLog, JsonLinesLogger};
 use crate::workbench::{WorkbenchRecord, WorkbenchStore};
@@ -45,14 +47,26 @@ struct RawPromptOptimizationResult {
     grid_cols: Option<u32>,
 }
 
-const PROMPT_OPTIMIZER_INSTRUCTIONS: &str = r#"
-你是 SpriteAnimte 的序列帧提示词优化器。你的目标不是套模板，而是把用户想法改写成更容易生成、切分和播放的单张 sprite sheet 提示词，重点解决每帧细节不稳定、相邻帧跳变、动作不连贯、帧间重叠和定位漂移。
-
-输出协议：
+const JSON_OUTPUT_PROTOCOL: &str = r#"输出协议：
 1. 只输出合法 JSON 对象，不要 Markdown、解释、代码块或额外字段。
 2. 字段固定为 prompt、negative_prompt、grid_rows、grid_cols。
 3. prompt 和 negative_prompt 为中文字符串；grid_rows、grid_cols 为数字。
-4. 必须保留用户明确指定的角色、动作、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
+"#;
+
+const SPRITE_SHEET_CORE_RULES: &str = r#"- 单张完整 sprite sheet，严格 N 行 M 列，共 N*M 帧；从左到右、从上到下读取；所有格子等宽等高；无间距、无边框、无编号、无文字、无水印、无可见网格线。
+- 每帧角色完整位于自己的格子中，保留安全边距；头发、衣摆、武器、道具、特效和残影不能越过格子边界，不能与相邻帧重叠。
+- 背景保持为纯色或高对比单色背景，默认纯白 #FFFFFF；如果用户指定背景色，使用用户指定背景色。
+- 新角色身份、服装、比例和画风在所有帧保持一致；只继承参考图的动作姿态和构图关系。
+"#;
+
+const COMMON_NEGATIVE_PROMPT_RULES: &str = "缺帧、重复帧、行列错乱、格子尺寸不一致、可见网格线、边框、编号、文字、水印、帧间重叠、角色跨格、身体裁切、安全边距不足、服装变化、动作断裂、手脚瞬移、模糊、低清晰度、复杂背景、渐变背景、纹理背景、场景道具、投影";
+const REFERENCE_NEGATIVE_PROMPT_RULES: &str = "偏离参考图动作、偏离参考图构图、改变参考图帧顺序、重新设计动作、额外姿势、比例漂移、角色身份不一致、脚底基线漂移、锚点漂移";
+
+fn prompt_optimizer_instructions() -> String {
+    format!(
+        r#"你是 SpriteAnimte 的序列帧提示词优化器。你的目标不是套模板，而是把用户想法改写成更容易生成、切分和播放的单张 sprite sheet 提示词，重点解决每帧细节不稳定、相邻帧跳变、动作不连贯、帧间重叠和定位漂移。
+
+{JSON_OUTPUT_PROTOCOL}4. 必须保留用户明确指定的角色、动作、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
 
 帧数与网格决策：
 - 用户明确指定行列、总帧数或动画时长时，这些是硬约束，不能私自改变。
@@ -73,15 +87,15 @@ prompt 必须包含的核心约束：
 - prompt 要精炼但具体，避免长示例、固定范式、无关美术扩写和逐帧堆砌。
 
 negative_prompt 合并用户已有负面提示词，并只补充核心问题：复杂背景、渐变背景、纹理背景、场景道具、投影、可见网格线、边框、编号、文字、水印、格子尺寸不一致、行列错乱、帧间重叠、角色跨格、身体贴边、身体裁切、安全边距不足、比例变化、服装变化、朝向变化、脚底基线不一致、定位点漂移、重复帧、缺帧、帧顺序混乱、相邻帧无关、动作断裂、阶段突变、手脚瞬移、支撑脚突换、重心跳跃、循环首尾不连贯、模糊、低清晰度。
-"#;
-const REFERENCE_PROMPT_OPTIMIZER_INSTRUCTIONS: &str = r#"
-你是 SpriteAnimte 的参考图复刻提示词优化器。用户会在生图请求中同时上传参考图，参考图通常是一张已经排好格子的序列帧图。你的任务不是重新设计动画，也不是详细描述参考图，而是把用户想替换的角色/风格/限制整理成最终提示词，让生图模型以参考图为原型，最大可能复刻参考图的序列帧。
+"#
+    )
+}
 
-输出协议：
-1. 只输出合法 JSON 对象，不要 Markdown、解释、代码块或额外字段。
-2. 字段固定为 prompt、negative_prompt、grid_rows、grid_cols。
-3. prompt 和 negative_prompt 为中文字符串；grid_rows、grid_cols 为数字。
-4. 必须保留用户明确指定的目标角色、替换角色、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
+fn reference_prompt_optimizer_instructions() -> String {
+    format!(
+        r#"你是 SpriteAnimte 的参考图复刻提示词优化器。用户会在生图请求中同时上传参考图，参考图通常是一张已经排好格子的序列帧图。你的任务不是重新设计动画，也不是详细描述参考图，而是把用户想替换的角色/风格/限制整理成最终提示词，让生图模型以参考图为原型，最大可能复刻参考图的序列帧。
+
+{JSON_OUTPUT_PROTOCOL}4. 必须保留用户明确指定的目标角色、替换角色、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
 
 参考图复刻模式：
 - prompt 的核心必须是：以随请求上传的参考图为唯一动作、构图和分镜模板，用用户指定的新角色替换参考图中的角色，生成一张同结构 sprite sheet。
@@ -89,46 +103,62 @@ const REFERENCE_PROMPT_OPTIMIZER_INSTRUCTIONS: &str = r#"
 - 不要重新设计动作，不要扩写复杂剧情，不要写长篇“第X-Y帧”阶段描述；参考图已经提供动作和帧间关系。
 - 必须要求最大程度复刻参考图的行列布局、总帧数、读取顺序、每格姿态、动作节奏、运动幅度、机位、镜头距离、角色占比、画面留白、脚底基线、锚点位置、朝向、比例和帧间连续性。
 - 如果用户明确指定行列、帧数或网格，按用户指定返回；否则沿用当前界面网格作为参考，不要因为想象动作复杂度而擅自改大。
-- prompt 必须写清：单张完整 sprite sheet，严格 N 行 M 列，共 N*M 帧；从左到右、从上到下读取；所有格子等宽等高；无间距、无边框、无编号、无文字、无水印、无可见网格线。
-- prompt 必须写清：每帧角色完整位于自己的格子中，保留安全边距；头发、衣摆、武器、道具、特效和残影不能越过格子边界，不能与相邻帧重叠。
-- prompt 必须写清：背景保持为纯色或高对比单色背景，默认纯白 #FFFFFF；如果用户指定背景色，使用用户指定背景色。
-- prompt 必须写清：新角色身份、服装、比例和画风在所有帧保持一致；只继承参考图的动作姿态和构图关系。
-- prompt 要短而强约束，重点围绕“参考图复刻 + 角色替换 + 可切分 sprite sheet”，不要加入无关美术描述。
+{SPRITE_SHEET_CORE_RULES}- prompt 要短而强约束，重点围绕“参考图复刻 + 角色替换 + 可切分 sprite sheet”，不要加入无关美术描述。
 
-negative_prompt 合并用户已有负面提示词，并补充：偏离参考图动作、偏离参考图构图、改变参考图帧顺序、重新设计动作、额外姿势、缺帧、重复帧、行列错乱、格子尺寸不一致、可见网格线、边框、编号、文字、水印、帧间重叠、角色跨格、身体裁切、安全边距不足、比例漂移、角色身份不一致、服装变化、朝向变化、脚底基线漂移、锚点漂移、动作断裂、手脚瞬移、模糊、低清晰度、复杂背景、渐变背景、纹理背景、场景道具、投影。
-"#;
-const REFERENCE_VISION_PROMPT_OPTIMIZER_INSTRUCTIONS: &str = r#"
-你是 SpriteAnimte 的参考图视觉理解提示词优化器。用户会把参考图直接上传给你，参考图通常是一张已经排好格子的序列帧图。你的任务不是写图像赏析，而是理解参考图的动作、构图、网格、姿态和帧间节奏，把用户想替换的角色/风格/限制整理成最终提示词，让生图模型以参考图为原型，最大可能复刻参考图的序列帧。
+negative_prompt 合并用户已有负面提示词，并补充：{REFERENCE_NEGATIVE_PROMPT_RULES}、{COMMON_NEGATIVE_PROMPT_RULES}。
+"#
+    )
+}
 
-输出协议：
-1. 只输出合法 JSON 对象，不要 Markdown、解释、代码块或额外字段。
-2. 字段固定为 prompt、negative_prompt、grid_rows、grid_cols。
-3. prompt 和 negative_prompt 为中文字符串；grid_rows、grid_cols 为数字。
-4. 必须保留用户明确指定的目标角色、替换角色、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
+fn reference_vision_prompt_optimizer_instructions() -> String {
+    format!(
+        r#"你是 SpriteAnimte 的参考图视觉理解提示词优化器。用户会把参考图直接上传给你，参考图通常是一张已经排好格子的序列帧图。你的任务不是写图像赏析，而是理解参考图的动作、构图、网格、姿态和帧间节奏，把用户想替换的角色/风格/限制整理成最终提示词，让生图模型以参考图为原型，最大可能复刻参考图的序列帧。
+
+{JSON_OUTPUT_PROTOCOL}4. 必须保留用户明确指定的目标角色、替换角色、服装、画风、背景色、行列数、帧数、视角、朝向和特殊限制。
 
 视觉参考图模式：
 - 先理解参考图的行列布局、总帧数、读取顺序、每格姿态、动作节奏、运动幅度、机位、镜头距离、角色占比、画面留白、脚底基线、锚点位置、朝向、比例和帧间连续性。
 - prompt 的核心必须是：以参考图为动作、构图和分镜模板，用用户指定的新角色替换参考图中的角色，生成一张同结构 sprite sheet。
 - 不要输出长篇参考图描述，不要重新设计动作，不要扩写复杂剧情；只把参考图中对复刻序列帧有用的视觉约束压缩进最终 prompt。
 - 如果能从参考图明确判断行列数，返回该行列数；如果用户明确指定行列、帧数或网格，优先遵守用户指定。
-- prompt 必须写清：单张完整 sprite sheet，严格 N 行 M 列，共 N*M 帧；从左到右、从上到下读取；所有格子等宽等高；无间距、无边框、无编号、无文字、无水印、无可见网格线。
-- prompt 必须写清：每帧角色完整位于自己的格子中，保留安全边距；头发、衣摆、武器、道具、特效和残影不能越过格子边界，不能与相邻帧重叠。
-- prompt 必须写清：背景保持为纯色或高对比单色背景，默认纯白 #FFFFFF；如果用户指定背景色，使用用户指定背景色。
-- prompt 必须写清：新角色身份、服装、比例和画风在所有帧保持一致；只继承参考图的动作姿态和构图关系。
-- prompt 要短而强约束，重点围绕“视觉参考图复刻 + 角色替换 + 可切分 sprite sheet”，不要加入无关美术描述。
+{SPRITE_SHEET_CORE_RULES}- prompt 要短而强约束，重点围绕“视觉参考图复刻 + 角色替换 + 可切分 sprite sheet”，不要加入无关美术描述。
 
-negative_prompt 合并用户已有负面提示词，并补充：偏离参考图动作、偏离参考图构图、改变参考图帧顺序、重新设计动作、额外姿势、缺帧、重复帧、行列错乱、格子尺寸不一致、可见网格线、边框、编号、文字、水印、帧间重叠、角色跨格、身体裁切、安全边距不足、比例漂移、角色身份不一致、服装变化、朝向变化、脚底基线漂移、锚点漂移、动作断裂、手脚瞬移、模糊、低清晰度、复杂背景、渐变背景、纹理背景、场景道具、投影。
-"#;
+negative_prompt 合并用户已有负面提示词，并补充：{REFERENCE_NEGATIVE_PROMPT_RULES}、{COMMON_NEGATIVE_PROMPT_RULES}。
+"#
+    )
+}
 const API_CHECK_TEXT_INSTRUCTIONS: &str =
     "你是 SpriteAnimte 的 API 连通性检测器，只需要返回合法 JSON。";
 const API_CHECK_TEXT_INPUT: &str = "请只返回 {\"ok\":true}，不要输出解释。";
 const REFERENCE_IMAGE_VARIANTS: &[(u32, u8)] = &[(1024, 86), (768, 82), (512, 76), (384, 70)];
 const REFERENCE_IMAGE_MAX_PNG_BYTES: usize = 700_000;
+const DEFAULT_VIDEO_MODEL: &str = "sora-2";
+const DEFAULT_VIDEO_SIZE: &str = "1280x720";
+const DEFAULT_VIDEO_SECONDS: &str = "4";
 
 #[derive(Debug, Clone)]
 struct ReferenceImageVariant {
     data_url: String,
     label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneratedVideoResult {
+    pub file_path: String,
+    pub file_name: String,
+    pub duration_seconds: Option<f64>,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigFileResult {
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedConfigResult {
+    pub file_path: String,
+    pub config: UserConfig,
 }
 
 /// 获取所有预设选项
@@ -146,10 +176,102 @@ pub fn load_config(state: State<'_, AppState>) -> UserConfig {
 
 /// 保存用户配置
 #[command]
-pub fn save_config(state: State<'_, AppState>, config: UserConfig) -> Result<(), String> {
+pub fn save_config(state: State<'_, AppState>, mut config: UserConfig) -> Result<(), String> {
+    config.normalize_api_profiles();
+    config.use_portable_save_dir(&state.default_save_dir);
+    asset_library::ensure_standard_dirs(&state.default_save_dir, &config.save_dir)?;
     let mut current = state.config.lock();
     *current = config.clone();
     current.save(&state.config_path)
+}
+
+/// 导出完整用户配置到 JSON 文件。
+#[command]
+pub async fn export_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut config: UserConfig,
+) -> Result<ConfigFileResult, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(file_path) = app
+        .dialog()
+        .file()
+        .set_title("导出 SpriteAnimte 配置")
+        .set_file_name("sprite-animte-config.json")
+        .add_filter("JSON 配置", &["json"])
+        .blocking_save_file()
+    else {
+        return Err("用户取消选择".into());
+    };
+
+    let path = ensure_json_extension(
+        file_path
+            .into_path()
+            .map_err(|e| format!("解析导出路径失败: {e}"))?,
+    );
+    config.normalize_api_profiles();
+    config.use_portable_save_dir(&state.default_save_dir);
+    config.save(&path)?;
+
+    Ok(ConfigFileResult {
+        file_path: path.to_string_lossy().to_string(),
+    })
+}
+
+/// 从 JSON 文件导入完整用户配置，并立即替换当前配置。
+#[command]
+pub async fn import_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ImportedConfigResult, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(file_path) = app
+        .dialog()
+        .file()
+        .set_title("导入 SpriteAnimte 配置")
+        .add_filter("JSON 配置", &["json"])
+        .blocking_pick_file()
+    else {
+        return Err("用户取消选择".into());
+    };
+
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("解析导入路径失败: {e}"))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取配置文件失败: {e}"))?;
+    let mut imported: UserConfig =
+        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {e}"))?;
+    imported.normalize_api_profiles();
+    imported.use_portable_save_dir(&state.default_save_dir);
+    asset_library::ensure_standard_dirs(&state.default_save_dir, &imported.save_dir)?;
+    imported.save(&state.config_path)?;
+
+    {
+        let mut current = state.config.lock();
+        *current = imported.clone();
+    }
+    {
+        let mut history = state.prompt_history.lock();
+        *history = imported.prompt_history.iter().cloned().collect();
+    }
+
+    Ok(ImportedConfigResult {
+        file_path: path.to_string_lossy().to_string(),
+        config: imported,
+    })
+}
+
+fn ensure_json_extension(mut path: PathBuf) -> PathBuf {
+    let is_json = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+    if !is_json {
+        path.set_extension("json");
+    }
+    path
 }
 
 /// 轻量检测生图 API：只访问 /models，不触发生图。
@@ -459,17 +581,17 @@ pub async fn optimize_prompt(
         "[prompt] 开始优化提示词 | 模型={model} API地址={api_base} 参考图模式={has_reference_image} 视觉理解={uses_reference_image_understanding}"
     );
     let instructions = if uses_reference_image_understanding {
-        REFERENCE_VISION_PROMPT_OPTIMIZER_INSTRUCTIONS
+        reference_vision_prompt_optimizer_instructions()
     } else if has_reference_image {
-        REFERENCE_PROMPT_OPTIMIZER_INSTRUCTIONS
+        reference_prompt_optimizer_instructions()
     } else {
-        PROMPT_OPTIMIZER_INSTRUCTIONS
+        prompt_optimizer_instructions()
     };
 
     let text_result = api_client::call_responses_text_api(
         &api_base,
         &api_key,
-        instructions,
+        &instructions,
         &user_input,
         reference_image_data_url.as_deref(),
         &model,
@@ -495,10 +617,11 @@ pub async fn optimize_prompt(
                 has_reference_image,
                 false,
             );
+            let fallback_instructions = reference_prompt_optimizer_instructions();
             let fallback_text = api_client::call_responses_text_api(
                 &api_base,
                 &api_key,
-                REFERENCE_PROMPT_OPTIMIZER_INSTRUCTIONS,
+                &fallback_instructions,
                 &fallback_input,
                 None,
                 &model,
@@ -561,6 +684,7 @@ pub fn apply_canvas_background_transparent(
 /// 将前端抠图画布保存为新的 PNG 文件。
 #[command]
 pub fn save_matted_image_data_url(
+    state: State<'_, AppState>,
     source_path: String,
     data_url: String,
 ) -> Result<TransparentBackgroundCommandResult, String> {
@@ -569,7 +693,16 @@ pub fn save_matted_image_data_url(
         .map(|(_, data)| data)
         .unwrap_or(data_url.as_str());
     let img = image_processor::base64_to_image(image_data)?;
-    let output_path = image_processor::save_transparent_copy(&img, &source_path)?;
+    let output_dir = {
+        let config = state.config.lock();
+        asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::MattedImages,
+        )?
+    };
+    let output_path =
+        image_processor::save_transparent_copy_to_dir(&img, Path::new(&source_path), &output_dir)?;
     let transparent_pixels = img
         .to_rgba8()
         .pixels()
@@ -684,12 +817,234 @@ pub async fn read_file_as_base64(path: String) -> Result<String, String> {
     .map_err(|e| format!("读取文件任务执行失败: {e}"))?
 }
 
+/// 使用当前 API 配置调用视频生成模型，保存 MP4 并返回本地路径。
+#[command]
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_video(
+    state: State<'_, AppState>,
+    channel: Channel<VideoGenerationEvent>,
+    api_key: String,
+    api_base: String,
+    proxy_url: String,
+    prompt: String,
+    model: String,
+    api_mode: String,
+    size: String,
+    seconds: String,
+) -> Result<GeneratedVideoResult, String> {
+    let start_time = std::time::Instant::now();
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("请输入视频生成提示词".into());
+    }
+
+    let (api_key, api_base, proxy_url, model, api_mode, save_dir) = {
+        let config = state.config.lock();
+        let resolved_api_key = if api_key.trim().is_empty() {
+            if config.video_api_key.trim().is_empty() {
+                config.api_key.clone()
+            } else {
+                config.video_api_key.clone()
+            }
+        } else {
+            api_key
+        };
+        let resolved_api_base = if api_base.trim().is_empty() {
+            if !config.video_api_base.trim().is_empty() {
+                config.video_api_base.clone()
+            } else if config.api_base.trim().is_empty() {
+                DEFAULT_API_BASE_URL.into()
+            } else {
+                config.api_base.clone()
+            }
+        } else {
+            api_base
+        };
+        let resolved_proxy_url = if proxy_url.trim().is_empty() {
+            if config.video_proxy_url.trim().is_empty() {
+                config.proxy_url.clone()
+            } else {
+                config.video_proxy_url.clone()
+            }
+        } else {
+            proxy_url
+        };
+        let resolved_model = if model.trim().is_empty() {
+            if config.video_model.trim().is_empty() {
+                DEFAULT_VIDEO_MODEL.to_string()
+            } else {
+                config.video_model.clone()
+            }
+        } else {
+            model.trim().to_string()
+        };
+        let resolved_api_mode = normalize_video_api_mode(if api_mode.trim().is_empty() {
+            &config.video_api_mode
+        } else {
+            &api_mode
+        });
+        let save_dir = asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::GeneratedVideos,
+        )?
+        .to_string_lossy()
+        .to_string();
+        (
+            resolved_api_key,
+            resolved_api_base,
+            resolved_proxy_url,
+            resolved_model,
+            resolved_api_mode,
+            save_dir,
+        )
+    };
+
+    let size = normalize_video_size(&size);
+    let seconds = normalize_video_seconds(&seconds);
+
+    if api_key.trim().is_empty() {
+        return Err("视频生成 API Key 为空".into());
+    }
+
+    eprintln!("[video-generate] 开始生成 | 调用方式={api_mode} 模型={model} size={size} seconds={seconds} api_base={api_base}");
+    let _ = channel.send(VideoGenerationEvent::Started);
+    let _ = channel.send(VideoGenerationEvent::Submitting);
+
+    let _ = channel.send(VideoGenerationEvent::Downloading {
+        id: api_mode.clone(),
+    });
+    let bytes = match api_mode.as_str() {
+        "videos" => {
+            api_client::call_videos_api(
+                &api_base, &api_key, &prompt, &model, &size, &seconds, &proxy_url,
+            )
+            .await
+        }
+        _ => {
+            api_client::call_chat_completions_video_api(
+                &api_base, &api_key, &prompt, &model, &size, &seconds, &proxy_url,
+            )
+            .await
+        }
+    }
+    .inspect_err(|err| {
+        let _ = channel.send(VideoGenerationEvent::Error {
+            message: err.clone(),
+        });
+    })?;
+
+    let _ = channel.send(VideoGenerationEvent::Saving);
+    let file_path = save_generated_video_bytes(&save_dir, &prompt, &bytes).inspect_err(|err| {
+        let _ = channel.send(VideoGenerationEvent::Error {
+            message: err.clone(),
+        });
+    })?;
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "generated_video.mp4".into());
+
+    {
+        let mut history = state.prompt_history.lock();
+        history.retain(|p| p != &prompt);
+        history.push_front(prompt.clone());
+        history.truncate(100);
+        let mut config = state.config.lock();
+        config.prompt_history = history.clone();
+        let _ = config.save(&state.config_path);
+    }
+
+    let duration_seconds = (start_time.elapsed().as_secs_f64() * 100.0).round() / 100.0;
+    let _ = channel.send(VideoGenerationEvent::Completed {
+        file_path: file_path.clone(),
+    });
+
+    Ok(GeneratedVideoResult {
+        file_path,
+        file_name,
+        duration_seconds: Some(duration_seconds),
+        model,
+    })
+}
+
 fn parse_color_key_mode(value: Option<&str>) -> image_processor::ColorKeyMode {
     match value.unwrap_or("auto") {
         "edge" => image_processor::ColorKeyMode::EdgeOnly,
         "global" => image_processor::ColorKeyMode::Global,
         _ => image_processor::ColorKeyMode::Auto,
     }
+}
+
+fn normalize_video_size(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return DEFAULT_VIDEO_SIZE.into();
+    }
+    value.to_string()
+}
+
+fn normalize_video_seconds(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return DEFAULT_VIDEO_SECONDS.into();
+    }
+    if let Ok(seconds) = value.parse::<u32>() {
+        return seconds.clamp(1, 20).to_string();
+    }
+    value.to_string()
+}
+
+fn normalize_video_api_mode(value: &str) -> String {
+    match value.trim() {
+        "videos" | "video" | "/videos" | "v1/videos" | "/v1/videos" => "videos".into(),
+        "chat_completions"
+        | "chat-completions"
+        | "chat/completions"
+        | "/chat/completions"
+        | "v1/chat/completions"
+        | "/v1/chat/completions" => "chat_completions".into(),
+        _ => "chat_completions".into(),
+    }
+}
+
+fn save_generated_video_bytes(
+    save_dir: &str,
+    prompt: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    std::fs::create_dir_all(save_dir).map_err(|e| format!("创建视频保存目录失败: {e}"))?;
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
+    let prompt_slug = sanitize_video_file_stem(prompt);
+    let file_name = if prompt_slug.is_empty() {
+        format!("sprite_animte_video_{timestamp}.mp4")
+    } else {
+        format!("sprite_animte_video_{timestamp}_{prompt_slug}.mp4")
+    };
+    let path = Path::new(save_dir).join(file_name);
+    std::fs::write(&path, bytes).map_err(|e| format!("保存生成视频失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn sanitize_video_file_stem(value: &str) -> String {
+    let stem: String = value
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                Some(ch.to_ascii_lowercase())
+            } else if ch == '-' || ch == '_' || ch.is_whitespace() {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let collapsed = stem
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    collapsed.chars().take(48).collect()
 }
 
 fn transparent_command_result(
@@ -727,13 +1082,15 @@ pub async fn generate_image(
     ratio: String,
     resolution: String,
     count: u32,
+    api_mode: String,
     reference_image_path: String,
 ) -> Result<GenerationResult, String> {
     let start_time = std::time::Instant::now();
+    let api_mode = normalize_generation_api_mode(&api_mode);
 
     let reference_image_path = reference_image_path.trim().to_string();
     eprintln!(
-        "[generate] 开始生成 | 模型={model} 风格={style} 宽高比={ratio} 分辨率={resolution} 数量={count} 参考图={}",
+        "[generate] 开始生成 | 模型={model} 调用方式={api_mode} 风格={style} 宽高比={ratio} 分辨率={resolution} 数量={count} 参考图={}",
         !reference_image_path.is_empty()
     );
     eprintln!("[generate] API地址={api_base} 提示词={prompt}");
@@ -772,11 +1129,13 @@ pub async fn generate_image(
 
     let save_dir = {
         let config = state.config.lock();
-        if config.save_dir.is_empty() {
-            state.default_save_dir.to_string_lossy().to_string()
-        } else {
-            config.save_dir.clone()
-        }
+        asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::GeneratedImages,
+        )?
+        .to_string_lossy()
+        .to_string()
     };
 
     let proxy_url = {
@@ -798,18 +1157,33 @@ pub async fn generate_image(
     let _ = channel.send(GenerateEvent::SendingRequest);
     let _ = channel.send(GenerateEvent::ReceivingResponse);
 
-    eprintln!("[generate] 请求方式固定为 responses，调用 /responses stream/sized");
-    let images_base64 = call_responses_with_reference_fallback(
-        &api_base,
-        &api_key,
-        &full_prompt,
-        &reference_image_variants,
-        &model,
-        count,
-        &size,
-        &proxy_url,
-    )
-    .await?;
+    let images_base64 = if api_mode == "chat_completions" {
+        eprintln!("[generate] 调用 /chat/completions 生图接口");
+        call_chat_completions_with_reference_fallback(
+            &api_base,
+            &api_key,
+            &full_prompt,
+            &reference_image_variants,
+            &model,
+            count,
+            &size,
+            &proxy_url,
+        )
+        .await?
+    } else {
+        eprintln!("[generate] 调用 /responses stream/sized 生图接口");
+        call_responses_with_reference_fallback(
+            &api_base,
+            &api_key,
+            &full_prompt,
+            &reference_image_variants,
+            &model,
+            count,
+            &size,
+            &proxy_url,
+        )
+        .await?
+    };
     let _ = channel.send(GenerateEvent::ExtractingUrls {
         found: images_base64.len(),
     });
@@ -989,6 +1363,75 @@ async fn call_responses_with_reference_fallback(
     }
 
     Err(last_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call_chat_completions_with_reference_fallback(
+    api_base: &str,
+    api_key: &str,
+    full_prompt: &str,
+    reference_image_variants: &[ReferenceImageVariant],
+    model: &str,
+    count: u32,
+    size: &str,
+    proxy_url: &str,
+) -> Result<Vec<String>, String> {
+    if reference_image_variants.is_empty() {
+        return api_client::call_chat_completions_image_api(
+            api_base,
+            api_key,
+            full_prompt,
+            None,
+            model,
+            count,
+            size,
+            proxy_url,
+        )
+        .await;
+    }
+
+    let mut last_error = String::new();
+    for (index, variant) in reference_image_variants.iter().enumerate() {
+        eprintln!(
+            "[generate] /chat/completions 使用参考图变体 {}/{}: {}",
+            index + 1,
+            reference_image_variants.len(),
+            variant.label
+        );
+        match api_client::call_chat_completions_image_api(
+            api_base,
+            api_key,
+            full_prompt,
+            Some(variant.data_url.as_str()),
+            model,
+            count,
+            size,
+            proxy_url,
+        )
+        .await
+        {
+            Ok(images) => return Ok(images),
+            Err(err)
+                if should_try_smaller_reference_image(&err)
+                    && index + 1 < reference_image_variants.len() =>
+            {
+                eprintln!(
+                    "[generate] /chat/completions 参考图请求失败，降级到更小参考图后重试: {err}"
+                );
+                last_error = err;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(last_error)
+}
+
+fn normalize_generation_api_mode(value: &str) -> String {
+    match value.trim() {
+        "chat_completions" | "chat-completions" | "chat/completions" => "chat_completions".into(),
+        _ => "responses".into(),
+    }
 }
 
 fn should_try_smaller_reference_image(err: &str) -> bool {

@@ -137,6 +137,14 @@ pub fn make_background_transparent(
 pub fn save_transparent_copy(img: &DynamicImage, source_path: &str) -> Result<String, String> {
     let source = Path::new(source_path);
     let output_dir = source.parent().unwrap_or_else(|| Path::new("."));
+    save_transparent_copy_to_dir(img, source, output_dir)
+}
+
+pub fn save_transparent_copy_to_dir(
+    img: &DynamicImage,
+    source: &Path,
+    output_dir: &Path,
+) -> Result<String, String> {
     std::fs::create_dir_all(output_dir).map_err(|e| format!("创建输出目录失败: {}", e))?;
 
     let stem = source
@@ -491,18 +499,16 @@ pub fn export_frame_sources(
     output_dir: &str,
     base_name: &str,
 ) -> Result<Vec<String>, String> {
-    if frames_data.is_empty() {
-        return Err("没有可导出的帧".into());
-    }
-
-    std::fs::create_dir_all(output_dir).map_err(|e| format!("创建目录失败: {}", e))?;
-
     let base_name = sanitize_export_name(base_name);
-    let decoded = decode_export_frames(frames_data)?;
-    let (canvas_w, canvas_h, anchor_canvas_x) = get_aligned_canvas_metrics(&decoded);
+    let prepared = prepare_export_frames(frames_data, output_dir)?;
     let mut saved = Vec::new();
-    for (i, frame) in decoded.iter().enumerate() {
-        let img = draw_aligned_export_frame(frame, canvas_w, canvas_h, anchor_canvas_x);
+    for (i, frame) in prepared.frames.iter().enumerate() {
+        let img = draw_aligned_export_frame(
+            frame,
+            prepared.canvas_w,
+            prepared.canvas_h,
+            prepared.anchor_canvas_x,
+        );
         let filename = format!("{}_{}.png", base_name, i);
         let filepath = std::path::Path::new(output_dir).join(&filename);
         DynamicImage::ImageRgba8(img)
@@ -521,20 +527,18 @@ pub fn export_gif_sources(
     base_name: &str,
     fps: u32,
 ) -> Result<String, String> {
-    if frames_data.is_empty() {
-        return Err("没有可导出的帧".into());
-    }
-
-    std::fs::create_dir_all(output_dir).map_err(|e| format!("创建目录失败: {}", e))?;
-
-    let decoded = decode_export_frames(frames_data)?;
-    let (canvas_w, canvas_h, anchor_canvas_x) = get_aligned_canvas_metrics(&decoded);
+    let prepared = prepare_export_frames(frames_data, output_dir)?;
 
     let frame_ms = (1000.0 / fps.clamp(1, 60) as f32).round().max(10.0) as u32;
     let delay = image::Delay::from_numer_denom_ms(frame_ms, 1);
-    let gif_frames = decoded.iter().map(|frame| {
+    let gif_frames = prepared.frames.iter().map(|frame| {
         image::Frame::from_parts(
-            draw_aligned_export_frame(frame, canvas_w, canvas_h, anchor_canvas_x),
+            draw_aligned_export_frame(
+                frame,
+                prepared.canvas_w,
+                prepared.canvas_h,
+                prepared.anchor_canvas_x,
+            ),
             0,
             0,
             delay,
@@ -558,6 +562,33 @@ pub fn export_gif_sources(
 struct DecodedExportFrame {
     image: RgbaImage,
     anchor_x: f32,
+}
+
+struct PreparedExportFrames {
+    frames: Vec<DecodedExportFrame>,
+    canvas_w: u32,
+    canvas_h: u32,
+    anchor_canvas_x: u32,
+}
+
+fn prepare_export_frames(
+    frames_data: &[(u32, String, String, Option<f32>)],
+    output_dir: &str,
+) -> Result<PreparedExportFrames, String> {
+    if frames_data.is_empty() {
+        return Err("没有可导出的帧".into());
+    }
+
+    std::fs::create_dir_all(output_dir).map_err(|e| format!("创建目录失败: {}", e))?;
+
+    let frames = decode_export_frames(frames_data)?;
+    let (canvas_w, canvas_h, anchor_canvas_x) = get_aligned_canvas_metrics(&frames);
+    Ok(PreparedExportFrames {
+        frames,
+        canvas_w,
+        canvas_h,
+        anchor_canvas_x,
+    })
 }
 
 fn decode_export_frames(

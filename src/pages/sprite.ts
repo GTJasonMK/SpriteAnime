@@ -1,11 +1,12 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   openImageFile,
+  importImageToLibrary,
   extractSpriteFrames,
   type SplitResult,
   type FrameData,
   type FrameCrop,
 } from "../api/commands";
+import { loadHtmlImageFromPath } from "../utils/image";
 import { CanvasPlayer } from "../widgets/canvas-player";
 import type { GeneratorPage } from "./generator";
 import {
@@ -76,6 +77,7 @@ import {
   type SpriteAction,
   type SpriteWorkflowState,
 } from "./sprite/workflow-state";
+import { getTabButton, onPrepareSpriteFromGenerator } from "./navigation";
 
 /// 序列帧预览页面控制器
 export class SpritePage {
@@ -148,11 +150,10 @@ export class SpritePage {
   }
 
   private bindEvents(): void {
-    const spriteTab = document.querySelector<HTMLButtonElement>(
-      '.tab-button[data-tab="sprite"]'
-    );
-    spriteTab?.addEventListener("click", () => this.syncGeneratedImages({ selectLatest: true }));
-    document.addEventListener("spriteanimte:prepare-sprite-from-generator", () => {
+    getTabButton("sprite")?.addEventListener("click", () => {
+      this.syncGeneratedImages({ selectLatest: true });
+    });
+    onPrepareSpriteFromGenerator(() => {
       this.syncGeneratedImages({ selectLatest: true, applyPreferredGrid: true });
       this.handlePreviewGrid();
     });
@@ -297,8 +298,9 @@ export class SpritePage {
     if (!this.canRunSpriteAction("pickImage")) return;
     try {
       const result = await openImageFile();
-      this.addImageSource(result.file_path);
-      this.els.imageSelect.value = result.file_path;
+      const imported = await importImageToLibrary(result.file_path);
+      this.addImageSource(imported.file_path);
+      this.els.imageSelect.value = imported.file_path;
       await this.handlePreviewGrid();
     } catch (err) {
       if (String(err) !== "用户取消选择") {
@@ -327,8 +329,9 @@ export class SpritePage {
     if (!imagePath) {
       try {
         const result = await openImageFile();
-        this.addImageSource(result.file_path);
-        imagePath = result.file_path;
+        const imported = await importImageToLibrary(result.file_path);
+        this.addImageSource(imported.file_path);
+        imagePath = imported.file_path;
       } catch (_) {
         return;
       }
@@ -431,15 +434,7 @@ export class SpritePage {
   }
 
   private loadImageElement(imagePath: string): Promise<HTMLImageElement> {
-    const src = convertFileSrc(imagePath);
-
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("图片加载失败"));
-      img.src = src;
-    });
+    return loadHtmlImageFromPath(imagePath);
   }
 
   private renderGridPreviewFromCurrentImage(): void {

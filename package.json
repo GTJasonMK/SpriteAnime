@@ -2,7 +2,7 @@
   "name": "sprite-anime",
   "private": true,
   "version": "0.1.0",
-  "description": "AI图片生成与精灵图动画预览工具",
+  "description": "AI image/video generation and sprite animation workflow desktop app",
   "type": "module",
   "scripts": {
     "dev": "vite",

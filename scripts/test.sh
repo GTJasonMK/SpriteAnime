@@ -5,18 +5,12 @@
 # ============================================================
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPORT_FILE="$PROJECT_ROOT/logs/test-report.txt"
 
 PASS=0; FAIL=0; SKIP=0
 RESULTS=""
-
-info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
-step()  { echo -e "\n${CYAN}═══ $* ═══${NC}"; }
 
 record() {
     local name=$1 status=$2 detail=${3:-}
@@ -34,11 +28,7 @@ trap cleanup EXIT INT TERM
 
 MODE="${1:---all}"
 
-echo -e "${CYAN}"
-echo "╔══════════════════════════════════════╗"
-echo "║   SpriteAnimte — 测试套件           ║"
-echo "╚══════════════════════════════════════╝"
-echo -e "${NC}"
+banner "SpriteAnimte - 测试套件"
 
 mkdir -p "$PROJECT_ROOT/logs"
 
@@ -84,9 +74,8 @@ run_type_check() {
 # ============================================================
 run_build_check() {
     step "前端构建验证"
-    cd "$PROJECT_ROOT"
 
-    if npx vite build 2>&1 | tee "$PROJECT_ROOT/logs/vite-build.log"; then
+    if run_vite_build 0 | tee "$PROJECT_ROOT/logs/vite-build.log"; then
         record "前端构建" PASS
     else
         record "前端构建" FAIL "详见 logs/vite-build.log"
@@ -98,9 +87,8 @@ run_build_check() {
 # ============================================================
 run_release_check() {
     step "Rust Release 编译检查"
-    cd "$PROJECT_ROOT/src-tauri"
 
-    if cargo check --release 2>&1 | tail -5; then
+    if run_cargo_check_release 5; then
         record "Rust Release 编译" PASS
     else
         record "Rust Release 编译" FAIL ""

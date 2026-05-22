@@ -4,29 +4,56 @@ import {
   cleanupVideoFrameBatchDir,
   cleanupVideoSpriteTempFiles,
   extractVideoFramesWithFfmpeg,
+  generateVideo,
+  importVideoToLibrary,
   logVideoSpriteMessage,
   openVideoFile,
   prepareVideoFileForPlayback,
   probeVideoFile,
   readFileAsBase64,
   saveSpriteSheetDataUrl,
+  type GeneratedVideoResult,
   type SavedImageResult,
   type VideoExtractEvent,
   type VideoExtractRegion,
+  type VideoGenerationEvent,
   type VideoProbeResult,
 } from "../api/commands";
+import { mapWithConcurrency, nextFrame } from "../utils/async";
+import { loadBitmapFromBase64 } from "../utils/bitmap";
+import {
+  clearPreviewCanvas,
+  fitPreviewCanvasSize,
+  preparePreviewCanvas,
+} from "../utils/canvas";
+import { getById, queryAll } from "../utils/dom";
+import {
+  formatInputNumber,
+  formatSeconds,
+  parseClampedInt as clampInt,
+  parseInputNumber,
+} from "../utils/number";
+import { getFileName, stripFileExtension as stripExtension } from "../utils/path";
 import type { GeneratorPage } from "./generator";
+import type {
+  BackgroundMode,
+  PixelBounds,
+  VideoSpriteWorkerFrameInput as WorkerFrameInput,
+  VideoSpriteWorkerMessage as WorkerMessage,
+  VideoSpriteWorkerRequest as WorkerRequest,
+  VideoSpriteWorkerSuccessMessage as WorkerSuccessMessage,
+} from "./video-sprite-types";
+import { clickTab } from "./navigation";
+import {
+  clampPixelBounds,
+  formatPixelBounds,
+  parseBackgroundMode,
+} from "./video-sprite-utils";
+import { renderVideoFrameList } from "./video-frame-list";
+import { setBusyState, setButtonState } from "../utils/ui";
 
-type BackgroundMode = "edge" | "firstFrame" | "none";
 type VideoSpriteView = "source" | "sheet" | "playback";
 type PlaybackMode = "source" | "output";
-
-interface PixelBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 interface ExtractionOptions {
   frameCount: number;
@@ -58,49 +85,20 @@ interface SourcePreviewFrame {
   height: number;
 }
 
-interface WorkerFrameInput {
-  base64: string;
-  time: number;
+interface SourcePreviewRequest {
+  start: number;
+  end: number;
+  frameCount: number;
+  previewFps: number;
+  maxFrames: number;
+  cacheKey: string;
+  signature: string;
 }
 
 interface ExtractedFrameBatch {
   frames: WorkerFrameInput[];
   cropRegion: PixelBounds;
 }
-
-interface WorkerFrameResult {
-  blob: Blob;
-  time: number;
-  width: number;
-  height: number;
-}
-
-interface WorkerProgressMessage {
-  id: number;
-  type: "progress";
-  done: number;
-  total: number;
-  message: string;
-}
-
-interface WorkerSuccessMessage {
-  id: number;
-  type: "success";
-  frames: WorkerFrameResult[];
-  sheetBlob: Blob;
-  sheetWidth: number;
-  sheetHeight: number;
-  cellWidth: number;
-  cellHeight: number;
-}
-
-interface WorkerErrorMessage {
-  id: number;
-  type: "error";
-  error: string;
-}
-
-type WorkerMessage = WorkerProgressMessage | WorkerSuccessMessage | WorkerErrorMessage;
 
 interface CropDragState {
   startX: number;
@@ -110,8 +108,12 @@ interface CropDragState {
 interface VideoSpriteElements {
   pickVideo: HTMLButtonElement;
   extract: HTMLButtonElement;
+  generateVideo: HTMLButtonElement;
   save: HTMLButtonElement;
   reference: HTMLButtonElement;
+  videoPrompt: HTMLTextAreaElement;
+  videoSize: HTMLSelectElement;
+  videoSeconds: HTMLSelectElement;
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   placeholder: HTMLElement;
@@ -129,6 +131,8 @@ interface VideoSpriteElements {
   end: HTMLInputElement;
   frameEdge: HTMLInputElement;
   padding: HTMLInputElement;
+  sourcePreviewFps: HTMLInputElement;
+  sourcePreviewMax: HTMLInputElement;
   cropFull: HTMLButtonElement;
   cropX: HTMLInputElement;
   cropY: HTMLInputElement;
@@ -167,6 +171,7 @@ export class VideoSpritePage {
   private sourcePreviewFrames: SourcePreviewFrame[] = [];
   private sourcePreviewIndex = 0;
   private sourcePreviewSignature = "";
+  private sourcePreviewCacheKey = "";
   private sourcePreviewCacheStart = 0;
   private sourcePreviewCacheEnd = 0;
   private sourcePreviewPreparePromise: Promise<void> | null = null;
@@ -187,6 +192,7 @@ export class VideoSpritePage {
   private playbackRenderSeq = 0;
   private playbackMode: PlaybackMode | null = null;
   private isExtracting = false;
+  private isGeneratingVideo = false;
   private workerSeq = 0;
 
   constructor() {
@@ -204,59 +210,67 @@ export class VideoSpritePage {
   }
 
   private cacheElements(): VideoSpriteElements {
-    const g = (id: string) => document.getElementById(id) as HTMLElement;
     return {
-      pickVideo: g("btn-video-sprite-pick") as HTMLButtonElement,
-      extract: g("btn-video-sprite-extract") as HTMLButtonElement,
-      save: g("btn-video-sprite-save") as HTMLButtonElement,
-      reference: g("btn-video-sprite-reference") as HTMLButtonElement,
-      video: g("video-sprite-video") as HTMLVideoElement,
-      canvas: g("video-sprite-canvas") as HTMLCanvasElement,
-      placeholder: g("video-sprite-placeholder"),
-      busy: g("video-sprite-busy"),
-      busyText: g("video-sprite-busy-text"),
-      file: g("video-sprite-file"),
-      duration: g("video-sprite-duration"),
-      status: g("video-sprite-status"),
-      size: g("video-sprite-size"),
-      frameTotal: g("video-sprite-frame-total"),
-      frameList: g("video-sprite-frame-list"),
-      frameCount: g("video-sprite-frame-count") as HTMLInputElement,
-      cols: g("video-sprite-cols") as HTMLInputElement,
-      start: g("video-sprite-start") as HTMLInputElement,
-      end: g("video-sprite-end") as HTMLInputElement,
-      frameEdge: g("video-sprite-frame-edge") as HTMLInputElement,
-      padding: g("video-sprite-padding") as HTMLInputElement,
-      cropFull: g("btn-video-sprite-crop-full") as HTMLButtonElement,
-      cropX: g("video-sprite-crop-x") as HTMLInputElement,
-      cropY: g("video-sprite-crop-y") as HTMLInputElement,
-      cropW: g("video-sprite-crop-w") as HTMLInputElement,
-      cropH: g("video-sprite-crop-h") as HTMLInputElement,
-      bgMode: g("video-sprite-bg-mode") as HTMLSelectElement,
-      threshold: g("video-sprite-threshold") as HTMLInputElement,
-      thresholdLabel: g("video-sprite-threshold-label"),
-      autoTrim: g("video-sprite-auto-trim") as HTMLInputElement,
-      transparent: g("video-sprite-transparent") as HTMLInputElement,
-      viewSource: g("btn-video-sprite-view-source") as HTMLButtonElement,
-      viewSheet: g("btn-video-sprite-view-sheet") as HTMLButtonElement,
-      viewPlayback: g("btn-video-sprite-view-playback") as HTMLButtonElement,
-      timeScrub: g("video-sprite-time-scrub") as HTMLInputElement,
-      startRange: g("video-sprite-start-range") as HTMLInputElement,
-      endRange: g("video-sprite-end-range") as HTMLInputElement,
-      currentTime: g("video-sprite-current-time"),
-      setStart: g("btn-video-sprite-set-start") as HTMLButtonElement,
-      setEnd: g("btn-video-sprite-set-end") as HTMLButtonElement,
-      prev: g("btn-video-sprite-prev") as HTMLButtonElement,
-      play: g("btn-video-sprite-play") as HTMLButtonElement,
-      next: g("btn-video-sprite-next") as HTMLButtonElement,
-      fps: g("video-sprite-fps") as HTMLInputElement,
-      fpsLabel: g("video-sprite-fps-label"),
-      playbackInfo: g("video-sprite-playback-info"),
+      pickVideo: getById<HTMLButtonElement>("btn-video-sprite-pick"),
+      extract: getById<HTMLButtonElement>("btn-video-sprite-extract"),
+      generateVideo: getById<HTMLButtonElement>("btn-video-generate"),
+      save: getById<HTMLButtonElement>("btn-video-sprite-save"),
+      reference: getById<HTMLButtonElement>("btn-video-sprite-reference"),
+      videoPrompt: getById<HTMLTextAreaElement>("video-generation-prompt"),
+      videoSize: getById<HTMLSelectElement>("video-generation-size"),
+      videoSeconds: getById<HTMLSelectElement>("video-generation-seconds"),
+      video: getById<HTMLVideoElement>("video-sprite-video"),
+      canvas: getById<HTMLCanvasElement>("video-sprite-canvas"),
+      placeholder: getById("video-sprite-placeholder"),
+      busy: getById("video-sprite-busy"),
+      busyText: getById("video-sprite-busy-text"),
+      file: getById("video-sprite-file"),
+      duration: getById("video-sprite-duration"),
+      status: getById("video-sprite-status"),
+      size: getById("video-sprite-size"),
+      frameTotal: getById("video-sprite-frame-total"),
+      frameList: getById("video-sprite-frame-list"),
+      frameCount: getById<HTMLInputElement>("video-sprite-frame-count"),
+      cols: getById<HTMLInputElement>("video-sprite-cols"),
+      start: getById<HTMLInputElement>("video-sprite-start"),
+      end: getById<HTMLInputElement>("video-sprite-end"),
+      frameEdge: getById<HTMLInputElement>("video-sprite-frame-edge"),
+      padding: getById<HTMLInputElement>("video-sprite-padding"),
+      sourcePreviewFps: getById<HTMLInputElement>("video-sprite-source-preview-fps"),
+      sourcePreviewMax: getById<HTMLInputElement>("video-sprite-source-preview-max"),
+      cropFull: getById<HTMLButtonElement>("btn-video-sprite-crop-full"),
+      cropX: getById<HTMLInputElement>("video-sprite-crop-x"),
+      cropY: getById<HTMLInputElement>("video-sprite-crop-y"),
+      cropW: getById<HTMLInputElement>("video-sprite-crop-w"),
+      cropH: getById<HTMLInputElement>("video-sprite-crop-h"),
+      bgMode: getById<HTMLSelectElement>("video-sprite-bg-mode"),
+      threshold: getById<HTMLInputElement>("video-sprite-threshold"),
+      thresholdLabel: getById("video-sprite-threshold-label"),
+      autoTrim: getById<HTMLInputElement>("video-sprite-auto-trim"),
+      transparent: getById<HTMLInputElement>("video-sprite-transparent"),
+      viewSource: getById<HTMLButtonElement>("btn-video-sprite-view-source"),
+      viewSheet: getById<HTMLButtonElement>("btn-video-sprite-view-sheet"),
+      viewPlayback: getById<HTMLButtonElement>("btn-video-sprite-view-playback"),
+      timeScrub: getById<HTMLInputElement>("video-sprite-time-scrub"),
+      startRange: getById<HTMLInputElement>("video-sprite-start-range"),
+      endRange: getById<HTMLInputElement>("video-sprite-end-range"),
+      currentTime: getById("video-sprite-current-time"),
+      setStart: getById<HTMLButtonElement>("btn-video-sprite-set-start"),
+      setEnd: getById<HTMLButtonElement>("btn-video-sprite-set-end"),
+      prev: getById<HTMLButtonElement>("btn-video-sprite-prev"),
+      play: getById<HTMLButtonElement>("btn-video-sprite-play"),
+      next: getById<HTMLButtonElement>("btn-video-sprite-next"),
+      fps: getById<HTMLInputElement>("video-sprite-fps"),
+      fpsLabel: getById("video-sprite-fps-label"),
+      playbackInfo: getById("video-sprite-playback-info"),
     };
   }
 
   private bindEvents(): void {
     this.els.pickVideo.addEventListener("click", () => this.handlePickVideo());
+    this.els.generateVideo.addEventListener("click", () => {
+      void this.handleGenerateVideo();
+    });
     this.els.extract.addEventListener("click", () => this.handleExtract());
     this.els.save.addEventListener("click", () => this.handleSave());
     this.els.reference.addEventListener("click", () => this.handleUseAsReference());
@@ -270,6 +284,10 @@ export class VideoSpritePage {
     });
     this.els.end.addEventListener("change", () => {
       this.handleEndTimeChanged();
+    });
+    [this.els.sourcePreviewFps, this.els.sourcePreviewMax].forEach((input) => {
+      input.addEventListener("input", () => this.handleSourcePreviewSettingChanged());
+      input.addEventListener("change", () => this.handleSourcePreviewSettingChanged());
     });
     this.els.timeScrub.addEventListener("input", () => this.handleSourceScrubInput());
     this.els.timeScrub.addEventListener("change", () => {
@@ -298,7 +316,7 @@ export class VideoSpritePage {
     this.els.play.addEventListener("click", () => {
       void this.togglePlayback();
     });
-    this.els.fps.addEventListener("input", () => this.syncPlaybackLabels());
+    this.els.fps.addEventListener("input", () => this.handlePlaybackFpsChanged());
     this.els.video.addEventListener("timeupdate", () => this.handleSourceVideoTimeUpdate());
     this.els.video.addEventListener("ended", () => this.handleSourceVideoEnded());
     this.els.canvas.addEventListener("pointerdown", (event) => this.handleCropPointerDown(event));
@@ -308,43 +326,16 @@ export class VideoSpritePage {
   }
 
   private async handlePickVideo(): Promise<void> {
-    if (this.isExtracting) return;
+    if (this.isBusy()) return;
 
     try {
       const file = await openVideoFile();
-      this.stopPlayback();
-      this.clearSourceVideo();
-      await this.releasePreparedVideoFile("replace source");
-      this.sourcePath = file.file_path;
-      this.sourceName = file.file_name || getFileName(file.file_path) || "animation";
-      this.videoMeta = null;
-      this.savedResult = null;
-      this.cropRegion = null;
-      this.clearGeneratedOutput();
-      this.clearSourcePreview();
-      this.setViewMode("source", false);
-      this.showBusy(false);
-
-      this.setStatus("正在用 ffmpeg 读取视频...");
-      await nextFrame();
-      await this.log(`pick video | ffmpeg probe | path=${file.file_path}`);
-      this.videoMeta = await probeVideoFile(file.file_path);
-
-      const duration = this.getVideoDuration();
-      this.els.file.textContent = this.sourceName;
-      this.els.duration.textContent = `时长: ${formatSeconds(duration)}`;
-      this.els.start.value = "0";
-      this.els.end.value = duration > 0 ? formatInputNumber(duration) : "0";
-      this.syncTimeControls();
-      this.setFullCropRegion(false);
-      if (await this.tryLoadSourceVideo()) {
-        this.renderSourceView();
-        this.setStatus("已直接加载源视频，可播放并拖拽选择画面区域");
-      } else {
-        await this.refreshSourcePreviewAtStart();
-        this.setStatus("当前 WebView 不支持直接播放该视频，已使用 ffmpeg 单帧预览");
-      }
-      this.syncControls();
+      const imported = await importVideoToLibrary(file.file_path);
+      await this.loadSourceVideo(
+        imported.file_path,
+        imported.file_name || file.file_name || getFileName(imported.file_path) || "animation",
+        "pick video"
+      );
     } catch (err) {
       if (!String(err).includes("用户取消")) {
         console.error("[video-sprite] 选择视频失败:", err);
@@ -352,6 +343,140 @@ export class VideoSpritePage {
         this.setStatus(`选择视频失败: ${String(err)}`);
       }
     }
+  }
+
+  private async handleGenerateVideo(): Promise<void> {
+    if (this.isBusy()) return;
+
+    const prompt = this.els.videoPrompt.value.trim();
+    if (!prompt) {
+      this.setStatus("请输入视频生成提示词");
+      this.els.videoPrompt.focus();
+      return;
+    }
+
+    const settings = this.generatorPage?.getActiveApiSettings();
+    const model = settings?.videoModel?.trim() || "sora-2";
+    const apiMode = settings?.videoApiMode || "chat_completions";
+    const size = this.els.videoSize.value.trim() || "1280x720";
+    const seconds = this.els.videoSeconds.value.trim() || "4";
+
+    this.stopPlayback();
+    this.isGeneratingVideo = true;
+    this.savedResult = null;
+    this.clearGeneratedOutput();
+    this.syncControls();
+    this.showBusy(true, "正在调用视频生成模型...");
+    this.setStatus("正在调用视频生成模型...");
+    await nextFrame();
+
+    try {
+      await this.log(
+        `ai video generate start | mode=${apiMode} model=${model} size=${size} seconds=${seconds} profile=${settings?.profileName || ""}`
+      );
+      const channel = new Channel<VideoGenerationEvent>();
+      channel.onmessage = (event: VideoGenerationEvent) => this.handleVideoGenerationProgress(event);
+      const result = await generateVideo(
+        channel,
+        settings?.videoApiKey || settings?.apiKey || "",
+        settings?.videoApiBase || settings?.apiBase || "",
+        settings?.videoProxyUrl || settings?.proxyUrl || "",
+        prompt,
+        model,
+        apiMode,
+        size,
+        seconds
+      );
+      await this.applyGeneratedVideo(result);
+      await this.log(`ai video generate ok | path=${result.file_path}`);
+    } catch (err) {
+      console.error("[video-sprite] 视频生成失败:", err);
+      await this.log(`ai video generate failed | ${String(err)}`);
+      this.setStatus(`视频生成失败: ${String(err)}`);
+    } finally {
+      this.isGeneratingVideo = false;
+      this.showBusy(false);
+      this.syncControls();
+      this.renderCurrentView();
+    }
+  }
+
+  private handleVideoGenerationProgress(event: VideoGenerationEvent): void {
+    switch (event.event) {
+      case "Started":
+      case "Submitting":
+        this.setStatus("正在调用视频生成模型...");
+        this.showBusy(true, "正在调用视频生成模型...");
+        break;
+      case "Downloading":
+        this.setStatus("正在读取生成视频...");
+        this.showBusy(true, "正在读取生成视频...");
+        break;
+      case "Saving":
+        this.setStatus("正在保存生成视频...");
+        this.showBusy(true, "正在保存生成视频...");
+        break;
+      case "Completed":
+        this.setStatus("视频生成完成，正在加载到抽帧工作台...");
+        this.showBusy(true, "正在加载生成视频...");
+        break;
+      case "Error":
+        this.setStatus(`视频生成失败: ${String(event.data?.message || "")}`);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private async applyGeneratedVideo(result: GeneratedVideoResult): Promise<void> {
+    await this.loadSourceVideo(
+      result.file_path,
+      result.file_name || getFileName(result.file_path) || "generated_video.mp4",
+      "ai video"
+    );
+    const elapsed = Number(result.duration_seconds);
+    const suffix = Number.isFinite(elapsed) ? `，耗时 ${elapsed.toFixed(2)}s` : "";
+    this.setStatus(`已生成并加载视频: ${this.sourceName}${suffix}`);
+  }
+
+  private async loadSourceVideo(
+    filePath: string,
+    fileName: string,
+    context: string
+  ): Promise<void> {
+    this.stopPlayback();
+    this.clearSourceVideo();
+    await this.releasePreparedVideoFile("replace source");
+    this.sourcePath = filePath;
+    this.sourceName = fileName || getFileName(filePath) || "animation";
+    this.videoMeta = null;
+    this.savedResult = null;
+    this.cropRegion = null;
+    this.clearGeneratedOutput();
+    this.clearSourcePreview();
+    this.setViewMode("source", false);
+    this.showBusy(false);
+
+    this.setStatus("正在用 ffmpeg 读取视频...");
+    await nextFrame();
+    await this.log(`${context} | ffmpeg probe | path=${filePath}`);
+    this.videoMeta = await probeVideoFile(filePath);
+
+    const duration = this.getVideoDuration();
+    this.els.file.textContent = this.sourceName;
+    this.els.duration.textContent = `时长: ${formatSeconds(duration)}`;
+    this.els.start.value = "0";
+    this.els.end.value = duration > 0 ? formatInputNumber(duration) : "0";
+    this.syncTimeControls();
+    this.setFullCropRegion(false);
+    if (await this.tryLoadSourceVideo()) {
+      this.renderSourceView();
+      this.setStatus("已直接加载源视频，可播放并拖拽选择画面区域");
+    } else {
+      await this.refreshSourcePreviewAtStart();
+      this.setStatus("当前 WebView 不支持直接播放该视频，已使用 ffmpeg 单帧预览");
+    }
+    this.syncControls();
   }
 
   private async refreshSourcePreviewAtStart(): Promise<void> {
@@ -463,7 +588,7 @@ export class VideoSpritePage {
   private async prepareSourcePreviewFrames(): Promise<void> {
     if (!this.sourcePath || !this.videoMeta) return;
     const request = this.getSourcePreviewRequest();
-    if (this.hasPreparedSourcePreview(request.signature)) {
+    if (this.hasPreparedSourcePreview(request)) {
       await this.log(`source preview reuse | signature=${request.signature}`);
       this.sourcePreviewIndex = findNearestSourceFrameIndex(this.sourcePreviewFrames, request.start);
       this.syncTimeControls();
@@ -473,7 +598,7 @@ export class VideoSpritePage {
     if (this.sourcePreviewPreparePromise) {
       await this.log(`source preview await existing prepare | signature=${request.signature}`);
       await this.sourcePreviewPreparePromise;
-      if (this.hasPreparedSourcePreview(request.signature)) {
+      if (this.hasPreparedSourcePreview(request)) {
         this.sourcePreviewIndex = findNearestSourceFrameIndex(this.sourcePreviewFrames, request.start);
         this.syncTimeControls();
         this.renderCurrentView();
@@ -491,17 +616,14 @@ export class VideoSpritePage {
     }
   }
 
-  private async prepareSourcePreviewFramesForRequest(request: {
-    start: number;
-    end: number;
-    frameCount: number;
-    signature: string;
-  }): Promise<void> {
+  private async prepareSourcePreviewFramesForRequest(request: SourcePreviewRequest): Promise<void> {
     const seq = ++this.sourcePreviewSeq;
     this.isPreparingSourcePreview = true;
     this.syncControls();
-    const { start, end, frameCount, signature } = request;
-    await this.log(`source preview prepare start | signature=${signature}`);
+    const { start, end, frameCount, previewFps, maxFrames, cacheKey, signature } = request;
+    await this.log(
+      `source preview prepare start | signature=${signature} fps=${previewFps} max=${maxFrames}`
+    );
     this.setStatus(`正在准备源视频播放预览 ${frameCount} 帧...`);
     this.showBusy(true, "正在准备源视频播放预览...");
     await nextFrame();
@@ -555,6 +677,7 @@ export class VideoSpritePage {
       }
       this.sourcePreviewFrames = frames;
       this.sourcePreviewSignature = signature;
+      this.sourcePreviewCacheKey = cacheKey;
       this.sourcePreviewCacheStart = start;
       this.sourcePreviewCacheEnd = end;
       this.sourcePreviewIndex = findNearestSourceFrameIndex(frames, start);
@@ -601,26 +724,18 @@ export class VideoSpritePage {
   }
 
   private async handleStartTimeChanged(refreshPreview: boolean): Promise<void> {
-    const duration = this.getVideoDuration();
-    const start = clampNumber(parseInputNumber(this.els.start.value, 0), 0, Math.max(duration, 0));
-    const end = clampNumber(parseInputNumber(this.els.end.value, duration), start, Math.max(duration, start));
-    this.els.start.value = formatInputNumber(start);
-    this.els.end.value = formatInputNumber(end);
-    this.clearSourcePlaybackFramesIfStale();
-    this.syncTimeControls();
+    const { start, end } = this.readTimeRangeInputs();
+    this.setTimeRangeInputs(start, end);
+    this.syncTimeRangeInputChange();
     if (refreshPreview) {
       await this.showSourceFrameAtTime(start, true).catch((err) => this.handleSourcePreviewError(err));
     }
   }
 
   private handleEndTimeChanged(): void {
-    const duration = this.getVideoDuration();
-    const start = clampNumber(parseInputNumber(this.els.start.value, 0), 0, Math.max(duration, 0));
-    const end = clampNumber(parseInputNumber(this.els.end.value, duration), start, Math.max(duration, start));
-    this.els.start.value = formatInputNumber(start);
-    this.els.end.value = formatInputNumber(end);
-    this.clearSourcePlaybackFramesIfStale();
-    this.syncTimeControls();
+    const { start, end } = this.readTimeRangeInputs();
+    this.setTimeRangeInputs(start, end);
+    this.syncTimeRangeInputChange();
   }
 
   private handleSourceScrubInput(): void {
@@ -631,10 +746,8 @@ export class VideoSpritePage {
     const duration = this.getVideoDuration();
     const start = clampNumber(parseInputNumber(this.els.startRange.value, 0), 0, Math.max(duration, 0));
     const end = Math.max(start, parseInputNumber(this.els.end.value, duration));
-    this.els.start.value = formatInputNumber(start);
-    this.els.end.value = formatInputNumber(end);
-    this.clearSourcePlaybackFramesIfStale();
-    this.syncTimeControls();
+    this.setTimeRangeInputs(start, end);
+    this.syncTimeRangeInputChange();
     await this.showSourceFrameAtTime(start, false);
   }
 
@@ -643,6 +756,22 @@ export class VideoSpritePage {
     const start = parseInputNumber(this.els.start.value, 0);
     const end = clampNumber(parseInputNumber(this.els.endRange.value, duration), start, Math.max(duration, start));
     this.els.end.value = formatInputNumber(end);
+    this.syncTimeRangeInputChange();
+  }
+
+  private readTimeRangeInputs(): { start: number; end: number; max: number } {
+    const max = Math.max(this.getVideoDuration(), 0);
+    const start = clampNumber(parseInputNumber(this.els.start.value, 0), 0, max);
+    const end = clampNumber(parseInputNumber(this.els.end.value, max), start, max);
+    return { start, end, max };
+  }
+
+  private setTimeRangeInputs(start: number, end: number): void {
+    this.els.start.value = formatInputNumber(start);
+    this.els.end.value = formatInputNumber(end);
+  }
+
+  private syncTimeRangeInputChange(): void {
     this.clearSourcePlaybackFramesIfStale();
     this.syncTimeControls();
   }
@@ -701,7 +830,7 @@ export class VideoSpritePage {
   }
 
   private async handleExtract(): Promise<void> {
-    if (this.isExtracting || !this.sourcePath || !this.cropRegion) return;
+    if (this.isBusy() || !this.sourcePath || !this.cropRegion) return;
 
     this.stopPlayback();
     const options = this.readOptions();
@@ -715,7 +844,7 @@ export class VideoSpritePage {
 
     try {
       await this.log(
-        `generate start | path=${this.sourcePath} crop=${formatRegion(options.cropRegion)} start=${options.start.toFixed(3)} end=${options.end.toFixed(3)} frames=${options.frameCount}`
+        `generate start | path=${this.sourcePath} crop=${formatPixelBounds(options.cropRegion)} start=${options.start.toFixed(3)} end=${options.end.toFixed(3)} frames=${options.frameCount}`
       );
       const frameBatch = await this.extractFrameInputs(options);
       this.showBusy(true, "正在处理帧并合成 PNG...");
@@ -820,7 +949,7 @@ export class VideoSpritePage {
         worker.terminate();
         reject(new Error(event.message || "序列帧 worker 执行失败"));
       };
-      worker.postMessage({
+      const request: WorkerRequest = {
         id,
         frames,
         options: {
@@ -833,7 +962,8 @@ export class VideoSpritePage {
           transparent: options.transparent,
           cropRegion: options.cropRegion,
         },
-      });
+      };
+      worker.postMessage(request);
     });
   }
 
@@ -861,35 +991,18 @@ export class VideoSpritePage {
   }
 
   private renderFrameList(): void {
-    this.els.frameList.innerHTML = "";
-    if (this.processedFrames.length === 0) {
-      this.els.frameList.innerHTML = '<div class="placeholder-text">选择视频后生成序列帧图</div>';
-      return;
-    }
-
-    this.processedFrames.forEach((frame, index) => {
-      const item = document.createElement("div");
-      item.className = "frame-thumb video-frame-thumb";
-      item.classList.toggle("current", index === this.currentFrameIndex);
-      item.addEventListener("click", () => {
+    renderVideoFrameList({
+      container: this.els.frameList,
+      frames: this.processedFrames,
+      currentIndex: this.currentFrameIndex,
+      formatTime: formatSeconds,
+      onSelect: (index) => {
         this.currentFrameIndex = index;
         this.setViewMode("playback", false);
         this.renderCurrentView();
         this.syncPlaybackLabels();
         this.updateFrameCurrentState();
-      });
-
-      const img = document.createElement("img");
-      img.src = frame.url;
-      img.alt = `抽取帧 ${index + 1}`;
-
-      const label = document.createElement("span");
-      label.className = "frame-index";
-      label.textContent = `${index + 1} · ${formatSeconds(frame.time)}`;
-
-      item.appendChild(img);
-      item.appendChild(label);
-      this.els.frameList.appendChild(item);
+      },
     });
   }
 
@@ -924,10 +1037,7 @@ export class VideoSpritePage {
     if (!result) return;
 
     this.generatorPage.setExternalReferenceImage(result.file_path, result.file_name);
-    const generatorTab = document.querySelector<HTMLButtonElement>(
-      '.tab-button[data-tab="generator"]'
-    );
-    generatorTab?.click();
+    clickTab("generator");
   }
 
   private readOptions(): ExtractionOptions {
@@ -972,37 +1082,48 @@ export class VideoSpritePage {
   }
 
   private getSelectedTimeRange(): { start: number; end: number } {
-    const duration = this.getVideoDuration();
-    const max = Math.max(duration, 0);
-    const start = clampNumber(parseInputNumber(this.els.start.value, 0), 0, max);
-    const end = clampNumber(parseInputNumber(this.els.end.value, max), start, Math.max(max, start));
+    const { start, end } = this.readTimeRangeInputs();
     return { start, end };
   }
 
-  private getSourcePreviewRequest(): {
-    start: number;
-    end: number;
-    frameCount: number;
-    signature: string;
-  } {
+  private getSourcePreviewRequest(): SourcePreviewRequest {
     const { start, end } = this.getSelectedTimeRange();
-    const frameCount = getSourcePreviewFrameCount(Math.max(0, end - start));
-    const signature = [
+    const { previewFps, maxFrames } = this.readSourcePreviewSettings();
+    const frameCount = getSourcePreviewFrameCount(Math.max(0, end - start), previewFps, maxFrames);
+    const cacheKey = [
       this.sourcePath,
+      previewFps,
+      maxFrames,
+    ].join("|");
+    const signature = [
+      cacheKey,
       start.toFixed(3),
       end.toFixed(3),
       frameCount,
     ].join("|");
-    return { start, end, frameCount, signature };
+    return { start, end, frameCount, previewFps, maxFrames, cacheKey, signature };
   }
 
-  private hasPreparedSourcePreview(signature: string = this.getSourcePreviewRequest().signature): boolean {
+  private readSourcePreviewSettings(): { previewFps: number; maxFrames: number } {
+    const previewFps = clampInt(this.els.sourcePreviewFps.value, 6, 1, 30);
+    const maxFrames = clampInt(this.els.sourcePreviewMax.value, 72, 2, 240);
+    this.els.sourcePreviewFps.value = String(previewFps);
+    this.els.sourcePreviewMax.value = String(maxFrames);
+    return { previewFps, maxFrames };
+  }
+
+  private handleSourcePreviewSettingChanged(): void {
+    this.readSourcePreviewSettings();
+    this.syncControls();
+  }
+
+  private hasPreparedSourcePreview(request: SourcePreviewRequest = this.getSourcePreviewRequest()): boolean {
     if (this.sourcePreviewFrames.length === 0) return false;
-    if (this.sourcePreviewSignature === signature) return true;
-    const { start, end } = this.getSelectedTimeRange();
+    if (this.sourcePreviewSignature === request.signature) return true;
+    if (this.sourcePreviewCacheKey !== request.cacheKey) return false;
     const epsilon = 0.05;
-    return start >= this.sourcePreviewCacheStart - epsilon &&
-      end <= this.sourcePreviewCacheEnd + epsilon;
+    return request.start >= this.sourcePreviewCacheStart - epsilon &&
+      request.end <= this.sourcePreviewCacheEnd + epsilon;
   }
 
   private handleCropInput(): void {
@@ -1029,7 +1150,7 @@ export class VideoSpritePage {
 
   private getCropRegionOrFull(): PixelBounds {
     const full = this.getFullRegion() || { x: 0, y: 0, width: 1, height: 1 };
-    return clampRegion(this.cropRegion || full, full.width, full.height);
+    return clampPixelBounds(this.cropRegion || full, full.width, full.height);
   }
 
   private getFullRegion(): PixelBounds | null {
@@ -1051,7 +1172,7 @@ export class VideoSpritePage {
   }
 
   private handleCropPointerDown(event: PointerEvent): void {
-    if (this.isExtracting || this.viewMode !== "source") return;
+    if (this.isBusy() || this.viewMode !== "source") return;
     const point = this.getCanvasPoint(event);
     if (!point) return;
     this.cropDrag = point;
@@ -1076,9 +1197,15 @@ export class VideoSpritePage {
 
   private handleCropPointerUp(event: PointerEvent): void {
     if (!this.cropDrag) return;
-    this.els.canvas.releasePointerCapture(event.pointerId);
+    const drag = this.cropDrag;
+    const point = this.viewMode === "source" ? this.getCanvasPoint(event) : null;
+    if (point) {
+      this.cropRegion = regionFromPoints(drag, point, this.getVideoWidth(), this.getVideoHeight());
+    }
+    if (this.els.canvas.hasPointerCapture(event.pointerId)) {
+      this.els.canvas.releasePointerCapture(event.pointerId);
+    }
     this.cropDrag = null;
-    this.handleCropPointerMove(event);
     this.syncCropInputs();
     this.renderCurrentView();
   }
@@ -1138,15 +1265,19 @@ export class VideoSpritePage {
       this.clearCanvas("选择视频后在这里拖拽选择画面区域");
       return;
     }
-    const canvas = this.els.canvas;
     const previewSize = fitPreviewCanvasSize(width, height, 1280);
-    canvas.width = previewSize.width;
-    canvas.height = previewSize.height;
+    const ctx = preparePreviewCanvas({
+      target: this.previewCanvasTarget(),
+      canvasWidth: previewSize.width,
+      canvasHeight: previewSize.height,
+      aspectWidth: width,
+      aspectHeight: height,
+      sizeText: `源尺寸: ${width} x ${height}`,
+    });
+    if (!ctx) return;
+    const canvas = this.els.canvas;
     canvas.style.aspectRatio = `${width} / ${height}`;
     this.els.video.style.aspectRatio = `${width} / ${height}`;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.scale(canvas.width / width, canvas.height / height);
     const sourceBitmap = this.sourceVideoReady ? null : this.getSourceDisplayBitmap();
@@ -1155,8 +1286,6 @@ export class VideoSpritePage {
     }
     this.drawCropOverlay(ctx, width, height);
     ctx.restore();
-    this.els.placeholder.style.display = "none";
-    this.els.size.textContent = `源尺寸: ${width} x ${height}`;
   }
 
   private drawCropOverlay(ctx: CanvasRenderingContext2D, width: number, height: number): void {
@@ -1186,16 +1315,14 @@ export class VideoSpritePage {
       this.clearCanvas("生成后显示序列帧图");
       return;
     }
-    const canvas = this.els.canvas;
-    canvas.width = this.spriteSheetBitmap.width;
-    canvas.height = this.spriteSheetBitmap.height;
-    canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
-    const ctx = canvas.getContext("2d");
+    const ctx = preparePreviewCanvas({
+      target: this.previewCanvasTarget(),
+      canvasWidth: this.spriteSheetBitmap.width,
+      canvasHeight: this.spriteSheetBitmap.height,
+      sizeText: `尺寸: ${this.spriteSheetBitmap.width} x ${this.spriteSheetBitmap.height}`,
+    });
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(this.spriteSheetBitmap, 0, 0);
-    this.els.placeholder.style.display = "none";
-    this.els.size.textContent = `尺寸: ${canvas.width} x ${canvas.height}`;
   }
 
   private renderPlaybackFrame(): void {
@@ -1206,15 +1333,14 @@ export class VideoSpritePage {
     }
     const frame = this.processedFrames[this.currentFrameIndex % this.processedFrames.length];
     const seq = ++this.playbackRenderSeq;
-    const canvas = this.els.canvas;
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-    canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
-    const ctx = canvas.getContext("2d");
+    const ctx = preparePreviewCanvas({
+      target: this.previewCanvasTarget(),
+      canvasWidth: frame.width,
+      canvasHeight: frame.height,
+      sizeText: `帧尺寸: ${frame.width} x ${frame.height}`,
+    });
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this.els.placeholder.style.display = "none";
-    this.els.size.textContent = `帧尺寸: ${frame.width} x ${frame.height}`;
+    const canvas = this.els.canvas;
     this.syncPlaybackLabels();
     this.updateFrameCurrentState();
     if (frame.bitmap) {
@@ -1247,12 +1373,19 @@ export class VideoSpritePage {
       await this.startSourceVideoPlayback();
       return;
     }
-    if (mode === "source" && !this.hasPreparedSourcePreview()) {
-      await this.prepareSourcePreviewFrames();
+    if (mode === "source") {
+      await this.ensureSourcePreviewReadyForPlayback();
       if (!this.hasPreparedSourcePreview()) return;
     }
     if (mode === "output" && this.processedFrames.length === 0) return;
     this.startPlayback(mode);
+  }
+
+  private async ensureSourcePreviewReadyForPlayback(): Promise<void> {
+    this.clearSourcePlaybackFramesIfStale();
+    if (!this.hasPreparedSourcePreview()) {
+      await this.prepareSourcePreviewFrames();
+    }
   }
 
   private startPlayback(mode: PlaybackMode): void {
@@ -1296,6 +1429,7 @@ export class VideoSpritePage {
     this.playbackMode = "source";
     this.isPlaying = true;
     this.els.play.textContent = "暂停";
+    this.syncSourceVideoPlaybackRate();
     this.syncControls();
     try {
       await this.els.video.play();
@@ -1347,9 +1481,7 @@ export class VideoSpritePage {
   private playbackTick(time: number): void {
     if (!this.isPlaying) return;
     const fps = clampInt(this.els.fps.value, 12, 1, 60);
-    const interval = this.playbackMode === "source"
-      ? this.getSourcePlaybackInterval()
-      : 1000 / fps;
+    const interval = 1000 / fps;
     if (time - this.lastPlaybackAt >= interval) {
       if (this.playbackMode === "source") {
         this.sourcePreviewIndex = this.getNextSourcePreviewIndex(1);
@@ -1362,22 +1494,6 @@ export class VideoSpritePage {
       this.lastPlaybackAt = time;
     }
     this.playbackHandle = window.requestAnimationFrame((nextTime) => this.playbackTick(nextTime));
-  }
-
-  private getSourcePlaybackInterval(): number {
-    const indices = this.getSourcePreviewPlaybackIndices();
-    if (indices.length < 2) {
-      return 250;
-    }
-    const currentIndex = indices.includes(this.sourcePreviewIndex) ? this.sourcePreviewIndex : indices[0];
-    const currentPos = indices.indexOf(currentIndex);
-    const nextIndex = indices[(currentPos + 1) % indices.length];
-    const current = this.sourcePreviewFrames[currentIndex];
-    const next = this.sourcePreviewFrames[nextIndex];
-    const { start, end } = this.getSelectedTimeRange();
-    const loopDelta = Math.max(0.05, end - current.time + next.time - start);
-    const delta = next.time > current.time ? next.time - current.time : loopDelta;
-    return clampNumber(delta * 1000, 33, 1000);
   }
 
   private getNextSourcePreviewIndex(delta: number): number {
@@ -1429,7 +1545,7 @@ export class VideoSpritePage {
   }
 
   private updateFrameCurrentState(): void {
-    this.els.frameList.querySelectorAll<HTMLElement>(".frame-thumb").forEach((item, index) => {
+    queryAll<HTMLElement>(".frame-thumb", this.els.frameList).forEach((item, index) => {
       item.classList.toggle("current", index === this.currentFrameIndex);
       item.setAttribute("aria-current", index === this.currentFrameIndex ? "true" : "false");
     });
@@ -1459,40 +1575,71 @@ export class VideoSpritePage {
     this.els.thresholdLabel.textContent = this.els.threshold.value;
   }
 
+  private handlePlaybackFpsChanged(): void {
+    this.syncPlaybackLabels();
+    if (this.sourceVideoReady) {
+      this.syncSourceVideoPlaybackRate();
+    }
+  }
+
+  private syncSourceVideoPlaybackRate(): void {
+    if (!this.sourceVideoReady) return;
+    const fps = clampInt(this.els.fps.value, 12, 1, 60);
+    this.els.video.playbackRate = clampNumber(fps / 24, 0.25, 4);
+  }
+
   private syncControls(): void {
     const hasVideo = Boolean(this.sourcePath && this.getVideoWidth() > 0 && this.getVideoHeight() > 0);
     const hasOutput = this.processedFrames.length > 0 && Boolean(this.spriteSheetBlob);
     const hasSourcePlayback = this.hasPreparedSourcePreview();
     const hasSourceStep = this.sourceVideoReady || hasSourcePlayback;
     const controlsSourcePlayback = this.viewMode === "source";
-    const canStartSourcePlayback = hasVideo && !this.isExtracting && !this.isPreparingSourcePreview;
+    const busy = this.isBusy();
+    const canStartSourcePlayback = hasVideo && !busy && !this.isPreparingSourcePreview;
     const hasActivePlayback = controlsSourcePlayback ? canStartSourcePlayback : hasOutput;
-    this.els.pickVideo.disabled = this.isExtracting;
-    this.els.extract.disabled = this.isExtracting || !hasVideo;
-    this.els.save.disabled = this.isExtracting || !hasOutput;
-    this.els.reference.disabled = this.isExtracting || !hasOutput;
+    setButtonState(this.els.pickVideo, { disabled: busy });
+    setButtonState(this.els.generateVideo, {
+      disabled: busy,
+      loading: this.isGeneratingVideo,
+      text: this.isGeneratingVideo ? "生成中" : "AI 生成",
+    });
+    setButtonState(this.els.extract, {
+      disabled: busy || !hasVideo,
+      loading: this.isExtracting,
+      text: this.isExtracting ? "生成中" : "生成序列帧图",
+    });
+    setButtonState(this.els.save, { disabled: busy || !hasOutput });
+    setButtonState(this.els.reference, { disabled: busy || !hasOutput });
     this.els.viewSheet.disabled = !hasOutput;
     this.els.viewPlayback.disabled = !hasOutput;
     this.els.prev.disabled = controlsSourcePlayback ? !hasSourceStep : !hasOutput;
-    this.els.play.disabled = !hasActivePlayback;
+    setButtonState(this.els.play, {
+      disabled: !hasActivePlayback,
+      text: this.isPlaying ? "暂停" : "播放",
+    });
     this.els.next.disabled = controlsSourcePlayback ? !hasSourceStep : !hasOutput;
-    this.els.setStart.disabled = this.isExtracting || !hasVideo;
-    this.els.setEnd.disabled = this.isExtracting || !hasVideo;
-    this.els.timeScrub.disabled = this.isExtracting || !hasVideo;
-    this.els.startRange.disabled = this.isExtracting || !hasVideo;
-    this.els.endRange.disabled = this.isExtracting || !hasVideo;
-    this.els.play.textContent = this.isPlaying ? "暂停" : "播放";
-    this.els.extract.classList.toggle("is-loading", this.isExtracting);
-    this.els.extract.textContent = this.isExtracting ? "生成中" : "生成序列帧图";
+    this.els.setStart.disabled = busy || !hasVideo;
+    this.els.setEnd.disabled = busy || !hasVideo;
+    this.els.timeScrub.disabled = busy || !hasVideo;
+    this.els.startRange.disabled = busy || !hasVideo;
+    this.els.endRange.disabled = busy || !hasVideo;
+    this.els.sourcePreviewFps.disabled = busy || !hasVideo || this.sourceVideoReady;
+    this.els.sourcePreviewMax.disabled = busy || !hasVideo || this.sourceVideoReady;
     [this.els.cropX, this.els.cropY, this.els.cropW, this.els.cropH].forEach((input) => {
-      input.disabled = this.isExtracting || !hasVideo;
+      input.disabled = busy || !hasVideo;
+    });
+    [this.els.videoPrompt, this.els.videoSize, this.els.videoSeconds].forEach((input) => {
+      input.disabled = busy;
     });
     this.syncPlaybackLabels();
   }
 
+  private isBusy(): boolean {
+    return this.isExtracting || this.isGeneratingVideo;
+  }
+
   private showBusy(show: boolean, text: string = "正在生成..."): void {
-    this.els.busy.hidden = !show;
-    this.els.busyText.textContent = text;
+    setBusyState(this.els.busy, this.els.busyText, show, text);
   }
 
   private async cleanupStartupTempFiles(): Promise<void> {
@@ -1568,6 +1715,7 @@ export class VideoSpritePage {
     closeSourcePreviewFrames(this.sourcePreviewFrames);
     this.sourcePreviewFrames = [];
     this.sourcePreviewSignature = "";
+    this.sourcePreviewCacheKey = "";
     this.sourcePreviewCacheStart = 0;
     this.sourcePreviewCacheEnd = 0;
     this.sourcePreviewIndex = 0;
@@ -1586,6 +1734,7 @@ export class VideoSpritePage {
     closeSourcePreviewFrames(this.sourcePreviewFrames);
     this.sourcePreviewFrames = [];
     this.sourcePreviewSignature = "";
+    this.sourcePreviewCacheKey = "";
     this.sourcePreviewCacheStart = 0;
     this.sourcePreviewCacheEnd = 0;
     this.sourcePreviewIndex = 0;
@@ -1595,14 +1744,15 @@ export class VideoSpritePage {
     this.syncControls();
   }
 
-  private clearSourcePlaybackFramesIfStale(): void {
-    if (!this.sourcePreviewSignature && !this.isPreparingSourcePreview) return;
-    const currentSignature = this.getSourcePreviewRequest().signature;
-    if (this.hasPreparedSourcePreview(currentSignature)) return;
+  private clearSourcePlaybackFramesIfStale(): boolean {
+    if (!this.sourcePreviewSignature && !this.isPreparingSourcePreview) return false;
+    const currentRequest = this.getSourcePreviewRequest();
+    if (this.hasPreparedSourcePreview(currentRequest)) return false;
     void this.log(
-      `source preview cache stale | old=${this.sourcePreviewSignature || "(preparing)"} new=${currentSignature}`
+      `source preview cache stale | old=${this.sourcePreviewSignature || "(preparing)"} new=${currentRequest.signature}`
     );
     this.clearSourcePlaybackFrames();
+    return true;
   }
 
   private clearSourceVideo(): void {
@@ -1631,10 +1781,7 @@ export class VideoSpritePage {
   }
 
   private syncTimeControls(): void {
-    const duration = this.getVideoDuration();
-    const max = Math.max(duration, 0);
-    const start = clampNumber(parseInputNumber(this.els.start.value, 0), 0, max);
-    const end = clampNumber(parseInputNumber(this.els.end.value, max), start, max);
+    const { start, end, max } = this.readTimeRangeInputs();
     const current = clampNumber(this.getSourceCurrentTime(), 0, max);
 
     [this.els.timeScrub, this.els.startRange, this.els.endRange].forEach((range) => {
@@ -1666,15 +1813,15 @@ export class VideoSpritePage {
 
   private clearCanvas(message: string): void {
     this.updateSourceVideoVisibility(false);
-    this.els.canvas.width = 1;
-    this.els.canvas.height = 1;
-    this.els.canvas.style.aspectRatio = "";
-    const ctx = this.els.canvas.getContext("2d");
-    ctx?.clearRect(0, 0, 1, 1);
-    this.els.canvas.closest(".preview-area")?.classList.remove("has-image");
-    this.els.placeholder.textContent = message;
-    this.els.placeholder.style.display = "";
-    this.els.size.textContent = "尺寸: -";
+    clearPreviewCanvas(this.previewCanvasTarget(), message);
+  }
+
+  private previewCanvasTarget() {
+    return {
+      canvas: this.els.canvas,
+      placeholder: this.els.placeholder,
+      sizeLabel: this.els.size,
+    };
   }
 
   private setStatus(text: string): void {
@@ -1704,9 +1851,7 @@ export class VideoSpritePage {
 
 async function loadBitmapFromPath(path: string): Promise<ImageBitmap> {
   const base64 = await readFileAsBase64(path);
-  const response = await fetch(`data:image/png;base64,${base64}`);
-  const blob = await response.blob();
-  return createImageBitmap(blob);
+  return loadBitmapFromBase64(base64);
 }
 
 function toVideoExtractRegion(region: PixelBounds): VideoExtractRegion {
@@ -1726,11 +1871,13 @@ function getBackendMaxExtractEdge(options: ExtractionOptions): number {
   return clampNumber(Math.round(qualityEdge), options.maxFrameEdge, 1536);
 }
 
-function getSourcePreviewFrameCount(duration: number): number {
+function getSourcePreviewFrameCount(duration: number, previewFps: number, maxFrames: number): number {
+  const safeFps = clampNumber(Math.round(previewFps), 1, 30);
+  const safeMaxFrames = clampNumber(Math.round(maxFrames), 2, 240);
   if (!Number.isFinite(duration) || duration <= 0) {
-    return 24;
+    return clampNumber(safeFps, 2, safeMaxFrames);
   }
-  return clampNumber(Math.ceil(duration * 6), 24, 72);
+  return clampNumber(Math.ceil(duration * safeFps), 2, safeMaxFrames);
 }
 
 function findNearestSourceFrameIndex(frames: SourcePreviewFrame[], time: number): number {
@@ -1749,43 +1896,6 @@ function findNearestSourceFrameIndex(frames: SourcePreviewFrame[], time: number)
 
 function closeSourcePreviewFrames(frames: SourcePreviewFrame[]): void {
   frames.forEach((frame) => frame.bitmap.close());
-}
-
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (true) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) return;
-      results[index] = await mapper(items[index], index);
-    }
-  }
-
-  await Promise.all(Array.from({ length: limit }, () => worker()));
-  return results;
-}
-
-function fitPreviewCanvasSize(width: number, height: number, maxEdge: number): { width: number; height: number } {
-  const edge = Math.max(width, height);
-  if (edge <= maxEdge) {
-    return {
-      width: Math.max(1, Math.round(width)),
-      height: Math.max(1, Math.round(height)),
-    };
-  }
-  const scale = maxEdge / edge;
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -1813,21 +1923,6 @@ function regionFromPoints(
     width: Math.max(1, Math.round(right - left)),
     height: Math.max(1, Math.round(bottom - top)),
   };
-}
-
-function clampRegion(region: PixelBounds, width: number, height: number): PixelBounds {
-  const regionWidth = clampNumber(Math.round(region.width), 1, width);
-  const regionHeight = clampNumber(Math.round(region.height), 1, height);
-  return {
-    x: clampNumber(Math.round(region.x), 0, Math.max(0, width - regionWidth)),
-    y: clampNumber(Math.round(region.y), 0, Math.max(0, height - regionHeight)),
-    width: regionWidth,
-    height: regionHeight,
-  };
-}
-
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 function waitForVideoReady(video: HTMLVideoElement, timeoutMs: number): Promise<void> {
@@ -1882,54 +1977,11 @@ function getMediaErrorMessage(video: HTMLVideoElement, err: unknown): string {
   return mediaError.message ? `${codeText}: ${mediaError.message}` : codeText;
 }
 
-function parseBackgroundMode(value: string): BackgroundMode {
-  if (value === "firstFrame" || value === "none") {
-    return value;
-  }
-  return "edge";
-}
-
-function clampInt(value: string, fallback: number, min: number, max: number): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, parsed));
-}
-
-function parseInputNumber(value: string, fallback: number): number {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function formatSeconds(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "-";
-  }
-  return `${value.toFixed(2)}s`;
-}
-
-function formatInputNumber(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : "0";
 }
 
 function getOutputFileName(sourceName: string): string {
   const stem = stripExtension(sourceName || "video");
   return `${stem}_sprite_sheet.png`;
-}
-
-function getFileName(path: string): string {
-  return path.split(/[\\/]/).pop() || "";
-}
-
-function stripExtension(fileName: string): string {
-  return fileName.replace(/\.[^/.]+$/, "");
-}
-
-function formatRegion(region: PixelBounds): string {
-  return `${Math.round(region.x)},${Math.round(region.y)},${Math.round(region.width)}x${Math.round(region.height)}`;
 }

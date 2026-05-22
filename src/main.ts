@@ -1,4 +1,5 @@
 import { GeneratorPage } from "./pages/generator";
+import { getPageForTab, getPages, getTabButtons } from "./pages/navigation";
 import { SpritePage } from "./pages/sprite";
 import { VideoSpritePage } from "./pages/video-sprite";
 
@@ -10,8 +11,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const sprite = new SpritePage();
 
   // 标签页切换
-  const tabButtons = document.querySelectorAll<HTMLButtonElement>(".tab-button");
-  const pages = document.querySelectorAll<HTMLElement>(".page");
+  const tabButtons = getTabButtons();
+  const pages = getPages();
 
   tabButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -24,7 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       // 切换页面
       pages.forEach((p) => p.classList.remove("active"));
-      const targetPage = document.getElementById(`page-${tabName}`);
+      const targetPage = getPageForTab(tabName);
       if (targetPage) {
         targetPage.classList.add("active");
       }

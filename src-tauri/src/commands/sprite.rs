@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{command, State};
 
+use crate::asset_library::{self, AssetCategory};
 use crate::config::{AppState, UserConfig};
 use crate::image_processor;
 
@@ -246,23 +247,34 @@ fn crop_frame_with_padding(
 /// 导出选中帧到指定目录
 #[command]
 pub fn export_frames(
+    state: State<'_, AppState>,
     frames: Vec<ExportFrame>,
-    output_dir: String,
     prefix: String,
 ) -> Result<Vec<String>, String> {
     let frame_data: Vec<(u32, String, String, Option<f32>)> = frames
         .iter()
         .map(|f| (f.index as u32, f.path.clone(), f.base64.clone(), f.anchor_x))
         .collect();
+    let base_name = sanitize_export_asset_name(&prefix, "sprite_frames");
+    let output_dir = {
+        let config = state.config.lock();
+        asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::ExportedFrameSets,
+        )?
+        .join(unique_timestamped_name(&base_name))
+    };
+    let output_dir = output_dir.to_string_lossy().to_string();
 
-    image_processor::export_frame_sources(&frame_data, &output_dir, &prefix)
+    image_processor::export_frame_sources(&frame_data, &output_dir, &base_name)
 }
 
 /// 导出选中帧为 GIF
 #[command]
 pub fn export_gif(
+    state: State<'_, AppState>,
     frames: Vec<ExportFrame>,
-    output_dir: String,
     file_name: String,
     fps: u32,
 ) -> Result<String, String> {
@@ -270,6 +282,16 @@ pub fn export_gif(
         .iter()
         .map(|f| (f.index as u32, f.path.clone(), f.base64.clone(), f.anchor_x))
         .collect();
+    let file_name = sanitize_export_asset_name(&file_name, "sprite_animation");
+    let output_dir = {
+        let config = state.config.lock();
+        asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::ExportedGifs,
+        )?
+    };
+    let output_dir = output_dir.to_string_lossy().to_string();
 
     image_processor::export_gif_sources(&frame_data, &output_dir, &file_name, fps)
 }
@@ -284,7 +306,16 @@ pub fn save_sprite_sheet_data_url(
     let image_data = extract_base64_image_data(&data_url)?;
     let img = image_processor::base64_to_image(image_data)?;
     let prefix = sanitize_sprite_sheet_prefix(&file_name);
-    let save_dir = state.default_save_dir.to_string_lossy().to_string();
+    let save_dir = {
+        let config = state.config.lock();
+        asset_library::category_dir(
+            &state.default_save_dir,
+            &config.save_dir,
+            AssetCategory::VideoSpriteSheets,
+        )?
+        .to_string_lossy()
+        .to_string()
+    };
     let file_path = image_processor::save_image(&img, &save_dir, &prefix, 1)?;
     let file_name = Path::new(&file_path)
         .file_name()
@@ -563,37 +594,35 @@ fn extract_video_frames_batch(
         ),
     );
 
-    let output = Command::new(ffmpeg_command)
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-nostdin")
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{start:.3}"))
-        .arg("-i")
-        .arg(video_path)
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-an")
-        .arg("-sn")
-        .arg("-dn")
-        .arg("-vf")
-        .arg(format!("fps={fps:.6},{filter}"))
-        .arg("-frames:v")
-        .arg(times.len().to_string())
-        .arg("-start_number")
-        .arg("0")
-        .arg(&pattern)
-        .output()
-        .map_err(|e| {
-            format!(
-                "无法运行 ffmpeg({})，请安装 ffmpeg 或在设置中填写 FFmpeg 路径: {}",
-                ffmpeg_command, e
-            )
-        })?;
+    let pattern_arg = pattern.to_string_lossy().to_string();
+    let output = run_ffmpeg_output(
+        ffmpeg_command,
+        &[
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-nostdin".into(),
+            "-y".into(),
+            "-ss".into(),
+            format!("{start:.3}"),
+            "-i".into(),
+            video_path.into(),
+            "-map".into(),
+            "0:v:0".into(),
+            "-an".into(),
+            "-sn".into(),
+            "-dn".into(),
+            "-vf".into(),
+            format!("fps={fps:.6},{filter}"),
+            "-frames:v".into(),
+            times.len().to_string(),
+            "-start_number".into(),
+            "0".into(),
+            pattern_arg,
+        ],
+    )?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = ffmpeg_stderr(&output);
     append_video_sprite_log_to_dir(
         log_dir,
         &format!(
@@ -871,34 +900,26 @@ fn probe_video_file_inner(
         return Err("视频文件不存在".into());
     }
 
-    let output = Command::new(ffprobe_command)
-        .arg("-v")
-        .arg("error")
-        .arg("-select_streams")
-        .arg("v:0")
-        .arg("-show_entries")
-        .arg("stream=width,height,duration,nb_frames,avg_frame_rate,r_frame_rate:format=duration")
-        .arg("-of")
-        .arg("json")
-        .arg(video_path)
-        .output()
-        .map_err(|e| {
-            format!(
-                "无法运行 ffprobe({})，请安装 ffmpeg 或在设置中填写 FFmpeg/FFprobe 路径: {}",
-                ffprobe_command, e
-            )
-        })?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe({}) 读取视频失败: {}",
-            ffprobe_command,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("解析 ffprobe 输出失败: {}", e))?;
+    let value = run_ffprobe_json(
+        ffprobe_command,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,duration,nb_frames,avg_frame_rate,r_frame_rate:format=duration",
+            "-of",
+            "json",
+            video_path,
+        ],
+        &format!(
+            "无法运行 ffprobe({})，请安装 ffmpeg 或在设置中填写 FFmpeg/FFprobe 路径",
+            ffprobe_command
+        ),
+        &format!("ffprobe({}) 读取视频失败", ffprobe_command),
+        "解析 ffprobe 输出失败",
+    )?;
     let stream = value
         .get("streams")
         .and_then(|streams| streams.as_array())
@@ -965,30 +986,24 @@ fn probe_video_duration_from_counted_frames(
     video_path: &str,
     ffprobe_command: &str,
 ) -> Result<Option<f64>, String> {
-    let output = Command::new(ffprobe_command)
-        .arg("-v")
-        .arg("error")
-        .arg("-select_streams")
-        .arg("v:0")
-        .arg("-count_frames")
-        .arg("-show_entries")
-        .arg("stream=duration,nb_frames,nb_read_frames,avg_frame_rate,r_frame_rate:format=duration")
-        .arg("-of")
-        .arg("json")
-        .arg(video_path)
-        .output()
-        .map_err(|e| format!("无法运行 ffprobe({}) 估算视频时长: {}", ffprobe_command, e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe({}) 估算视频时长失败: {}",
-            ffprobe_command,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("解析 ffprobe 时长估算输出失败: {}", e))?;
+    let value = run_ffprobe_json(
+        ffprobe_command,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=duration,nb_frames,nb_read_frames,avg_frame_rate,r_frame_rate:format=duration",
+            "-of",
+            "json",
+            video_path,
+        ],
+        &format!("无法运行 ffprobe({}) 估算视频时长", ffprobe_command),
+        &format!("ffprobe({}) 估算视频时长失败", ffprobe_command),
+        "解析 ffprobe 时长估算输出失败",
+    )?;
     let stream = value
         .get("streams")
         .and_then(|streams| streams.as_array())
@@ -1002,35 +1017,50 @@ fn probe_video_duration_from_packets(
     video_path: &str,
     ffprobe_command: &str,
 ) -> Result<Option<f64>, String> {
+    let value = run_ffprobe_json(
+        ffprobe_command,
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,dts_time,duration_time",
+            "-of",
+            "json",
+            video_path,
+        ],
+        &format!(
+            "无法运行 ffprobe({}) 读取包时间戳估算视频时长",
+            ffprobe_command
+        ),
+        &format!("ffprobe({}) 读取包时间戳失败", ffprobe_command),
+        "解析 ffprobe 包时间戳输出失败",
+    )?;
+    Ok(estimate_video_duration_from_packets(&value))
+}
+
+fn run_ffprobe_json(
+    ffprobe_command: &str,
+    args: &[&str],
+    run_error: &str,
+    status_error: &str,
+    parse_error: &str,
+) -> Result<serde_json::Value, String> {
     let output = Command::new(ffprobe_command)
-        .arg("-v")
-        .arg("error")
-        .arg("-select_streams")
-        .arg("v:0")
-        .arg("-show_entries")
-        .arg("packet=pts_time,dts_time,duration_time")
-        .arg("-of")
-        .arg("json")
-        .arg(video_path)
+        .args(args)
         .output()
-        .map_err(|e| {
-            format!(
-                "无法运行 ffprobe({}) 读取包时间戳估算视频时长: {}",
-                ffprobe_command, e
-            )
-        })?;
+        .map_err(|e| format!("{}: {}", run_error, e))?;
 
     if !output.status.success() {
         return Err(format!(
-            "ffprobe({}) 读取包时间戳失败: {}",
-            ffprobe_command,
+            "{}: {}",
+            status_error,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
 
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("解析 ffprobe 包时间戳输出失败: {}", e))?;
-    Ok(estimate_video_duration_from_packets(&value))
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("{}: {}", parse_error, e))
 }
 
 fn estimate_video_duration_from_stream_frame_count(stream: &serde_json::Value) -> Option<f64> {
@@ -1271,6 +1301,25 @@ fn fit_dimensions(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
     )
 }
 
+fn run_ffmpeg_output(
+    ffmpeg_command: &str,
+    args: &[String],
+) -> Result<std::process::Output, String> {
+    Command::new(ffmpeg_command)
+        .args(args)
+        .output()
+        .map_err(|e| {
+            format!(
+                "无法运行 ffmpeg({})，请安装 ffmpeg 或在设置中填写 FFmpeg 路径: {}",
+                ffmpeg_command, e
+            )
+        })
+}
+
+fn ffmpeg_stderr(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).trim().to_string()
+}
+
 fn extract_single_video_frame(
     ffmpeg_command: &str,
     video_path: &str,
@@ -1367,39 +1416,36 @@ fn extract_single_video_frame_bytes(
             video_path
         ),
     );
-    let output = Command::new(ffmpeg_command)
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-nostdin")
-        .arg("-y")
-        .arg("-ss")
-        .arg(format!("{:.3}", time_seconds.max(0.0)))
-        .arg("-i")
-        .arg(video_path)
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-an")
-        .arg("-sn")
-        .arg("-dn")
-        .arg("-vf")
-        .arg(filter)
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-vcodec")
-        .arg("png")
-        .arg("-")
-        .output()
-        .map_err(|e| {
-            format!(
-                "无法运行 ffmpeg({})，请安装 ffmpeg 或在设置中填写 FFmpeg 路径: {}",
-                ffmpeg_command, e
-            )
-        })?;
+    let output = run_ffmpeg_output(
+        ffmpeg_command,
+        &[
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-nostdin".into(),
+            "-y".into(),
+            "-ss".into(),
+            format!("{:.3}", time_seconds.max(0.0)),
+            "-i".into(),
+            video_path.into(),
+            "-map".into(),
+            "0:v:0".into(),
+            "-frames:v".into(),
+            "1".into(),
+            "-an".into(),
+            "-sn".into(),
+            "-dn".into(),
+            "-vf".into(),
+            filter.into(),
+            "-f".into(),
+            "image2pipe".into(),
+            "-vcodec".into(),
+            "png".into(),
+            "-".into(),
+        ],
+    )?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = ffmpeg_stderr(&output);
     append_optional_video_sprite_log(
         log_dir,
         &format!(
@@ -1528,12 +1574,45 @@ fn sanitize_sprite_sheet_prefix(name: &str) -> String {
     }
 }
 
+fn sanitize_export_asset_name(name: &str, fallback: &str) -> String {
+    let stem = Path::new(name)
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.to_string());
+    let sanitized: String = stem
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let sanitized = sanitized
+        .trim_matches(|ch: char| ch == '.' || ch == '_' || ch == '-' || ch.is_whitespace())
+        .to_string();
+
+    if sanitized.is_empty() {
+        fallback.into()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_timestamped_name(base_name: &str) -> String {
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%f");
+    format!("{base_name}_{timestamp}")
+}
+
 fn create_temp_frame_dir(state: &AppState) -> Result<PathBuf, String> {
     let root = state
         .workbench_records_path
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("sprite-animte"))
+        .ok_or_else(|| "应用数据目录不可用".to_string())?
         .join("temp_frames");
     std::fs::create_dir_all(&root).map_err(|e| format!("创建临时帧目录失败: {}", e))?;
 
@@ -1551,7 +1630,7 @@ fn create_temp_video_frame_dir_for_records_path(
     let root = workbench_records_path
         .parent()
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("sprite-animte"))
+        .ok_or_else(|| "应用数据目录不可用".to_string())?
         .join("temp_video_frames");
     std::fs::create_dir_all(&root).map_err(|e| format!("创建临时视频帧目录失败: {}", e))?;
 
@@ -1576,33 +1655,14 @@ fn save_temp_frame(
 }
 
 fn cleanup_old_temp_frame_dirs(root: &Path) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut dirs: Vec<_> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            if !metadata.is_dir() {
-                return None;
-            }
-            let modified = metadata.modified().ok()?;
-            Some((modified, entry.path()))
-        })
-        .collect();
-    dirs.sort_by_key(|(modified, _)| *modified);
-
-    const MAX_TEMP_FRAME_BATCHES: usize = 24;
-    if dirs.len() <= MAX_TEMP_FRAME_BATCHES {
-        return;
-    }
-    let remove_count = dirs.len() - MAX_TEMP_FRAME_BATCHES;
-    for (_, path) in dirs.into_iter().take(remove_count) {
-        let _ = std::fs::remove_dir_all(path);
-    }
+    cleanup_old_temp_dirs(root, 24);
 }
 
 fn cleanup_old_temp_video_frame_dirs(root: &Path) {
+    cleanup_old_temp_dirs(root, 12);
+}
+
+fn cleanup_old_temp_dirs(root: &Path, max_keep: usize) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -1619,11 +1679,10 @@ fn cleanup_old_temp_video_frame_dirs(root: &Path) {
         .collect();
     dirs.sort_by_key(|(modified, _)| *modified);
 
-    const MAX_TEMP_VIDEO_FRAME_BATCHES: usize = 12;
-    if dirs.len() <= MAX_TEMP_VIDEO_FRAME_BATCHES {
+    if dirs.len() <= max_keep {
         return;
     }
-    let remove_count = dirs.len() - MAX_TEMP_VIDEO_FRAME_BATCHES;
+    let remove_count = dirs.len() - max_keep;
     for (_, path) in dirs.into_iter().take(remove_count) {
         let _ = std::fs::remove_dir_all(path);
     }

@@ -22,11 +22,38 @@ export interface PresetsPayload {
   resolutions: string[];
 }
 
-export interface UserConfig {
+export interface ApiProfile {
+  id: string;
+  name: string;
   api_key: string;
   api_base: string;
   proxy_url: string;
+  generation_api_mode: string;
   last_model: string;
+  video_api_key: string;
+  video_api_base: string;
+  video_proxy_url: string;
+  video_model: string;
+  video_api_mode: string;
+  prompt_optimizer_api_key: string;
+  prompt_optimizer_api_base: string;
+  prompt_optimizer_model: string;
+  prompt_optimizer_vision: boolean;
+}
+
+export interface UserConfig {
+  api_profiles: ApiProfile[];
+  active_api_profile_id: string;
+  api_key: string;
+  api_base: string;
+  proxy_url: string;
+  generation_api_mode: string;
+  last_model: string;
+  video_api_key: string;
+  video_api_base: string;
+  video_proxy_url: string;
+  video_model: string;
+  video_api_mode: string;
   last_ratio: string;
   last_resolution: string;
   last_style: string;
@@ -46,10 +73,22 @@ export interface GenerateEvent {
   data: any;
 }
 
+export interface VideoGenerationEvent {
+  event: string;
+  data?: any;
+}
+
 export interface GenerationResult {
   images_base64: string[];
   image_urls: string[];
   duration_seconds?: number;
+}
+
+export interface GeneratedVideoResult {
+  file_path: string;
+  file_name: string;
+  duration_seconds?: number;
+  model: string;
 }
 
 export interface FrameData {
@@ -180,6 +219,15 @@ export interface ApiCheckResult {
   modelFound?: boolean | null;
 }
 
+export interface ConfigFileResult {
+  file_path: string;
+}
+
+export interface ImportedConfigResult {
+  file_path: string;
+  config: UserConfig;
+}
+
 // ==================== 预设与配置 ====================
 
 export async function getPresets(): Promise<PresetsPayload> {
@@ -192,6 +240,14 @@ export async function loadConfig(): Promise<UserConfig> {
 
 export async function saveConfig(config: UserConfig): Promise<void> {
   return invoke("save_config", { config });
+}
+
+export async function exportConfig(config: UserConfig): Promise<ConfigFileResult> {
+  return invoke<ConfigFileResult>("export_config", { config });
+}
+
+export async function importConfig(): Promise<ImportedConfigResult> {
+  return invoke<ImportedConfigResult>("import_config");
 }
 
 export async function checkGenerationApi(
@@ -235,6 +291,7 @@ export async function generateImage(
   ratio: string,
   resolution: string,
   count: number,
+  apiMode: string,
   referenceImagePath: string
 ): Promise<GenerationResult> {
   return invoke<GenerationResult>("generate_image", {
@@ -248,7 +305,32 @@ export async function generateImage(
     ratio,
     resolution,
     count,
+    apiMode,
     referenceImagePath,
+  });
+}
+
+export async function generateVideo(
+  channel: Channel<VideoGenerationEvent>,
+  apiKey: string,
+  apiBase: string,
+  proxyUrl: string,
+  prompt: string,
+  model: string,
+  apiMode: string,
+  size: string,
+  seconds: string
+): Promise<GeneratedVideoResult> {
+  return invoke<GeneratedVideoResult>("generate_video", {
+    channel,
+    apiKey,
+    apiBase,
+    proxyUrl,
+    prompt,
+    model,
+    apiMode,
+    size,
+    seconds,
   });
 }
 
@@ -354,25 +436,21 @@ export async function extractSpriteFrames(
 
 export async function exportFrames(
   frames: ExportFrame[],
-  outputDir: string,
   prefix: string
 ): Promise<string[]> {
   return invoke<string[]>("export_frames", {
     frames,
-    outputDir,
     prefix,
   });
 }
 
 export async function exportGif(
   frames: ExportFrame[],
-  outputDir: string,
   fileName: string,
   fps: number
 ): Promise<string> {
   return invoke<string>("export_gif", {
     frames,
-    outputDir,
     fileName,
     fps,
   });
@@ -418,16 +496,20 @@ export async function logVideoSpriteMessage(message: string): Promise<void> {
 
 // ==================== 文件操作 ====================
 
-export async function selectDirectory(): Promise<string> {
-  return invoke<string>("select_directory");
-}
-
 export async function openImageFile(): Promise<FileOpenResult> {
   return invoke<FileOpenResult>("open_image_file");
 }
 
 export async function openVideoFile(): Promise<FileOpenResult> {
   return invoke<FileOpenResult>("open_video_file");
+}
+
+export async function importImageToLibrary(sourcePath: string): Promise<FileOpenResult> {
+  return invoke<FileOpenResult>("import_image_to_library", { sourcePath });
+}
+
+export async function importVideoToLibrary(sourcePath: string): Promise<FileOpenResult> {
+  return invoke<FileOpenResult>("import_video_to_library", { sourcePath });
 }
 
 export async function prepareVideoFileForPlayback(sourcePath: string): Promise<FileOpenResult> {

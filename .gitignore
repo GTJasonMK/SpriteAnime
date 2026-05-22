@@ -19,6 +19,7 @@ output/
 
 # Local runtime data
 config.json
+SpriteAnimteData/
 logs/
 src-tauri/logs/
 .run-lock
@@ -26,10 +27,13 @@ src-tauri/logs/
 
 # Local assistant/editor state
 .claude/settings.local.json
+.agents/
+AGENTS.md
+agent.md
+CLAUDE.md
 .codex
 .codex/
 ui_aimed_type.txt
-AGENTS.md
 # Environment files
 .env
 .env.*

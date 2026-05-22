@@ -39,6 +39,12 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
+      - name: Node algorithm tests
+        run: |
+          npm run test:matting
+          npm run test:bounds
+          npm run test:workflow
+
       - name: Frontend build
         run: npm run build
 
