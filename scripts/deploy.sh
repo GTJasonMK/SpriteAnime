@@ -81,6 +81,7 @@ if [ ! -f "$ICON_DIR/32x32.png" ] || [ "$FORCE" = "--force" ]; then
     info "生成占位图标..."
     python3 -c "
 import struct, zlib
+COLOR = (0xc6, 0x61, 0x3f, 0xff)
 def rgba_png(w, h, path):
     def ch(t, d):
         c = t + d
@@ -88,11 +89,47 @@ def rgba_png(w, h, path):
     hdr = b'\\x89PNG\\r\\n\\x1a\\n' + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
     raw = b''
     for _ in range(h):
-        raw += b'\\x00' + b'\\xc6\\x61\\x3f\\xff' * w
+        raw += b'\\x00' + bytes(COLOR) * w
     dat = ch(b'IDAT', zlib.compress(raw))
     with open(path, 'wb') as f: f.write(hdr + dat + ch(b'IEND', b''))
-for sz, nm in [(32,'32x32.png'),(128,'128x128.png'),(256,'128x128@2x.png'),(32,'icon.icns'),(32,'icon.ico')]:
+
+def ico_bitmap(w, h):
+    r, g, b, a = COLOR
+    row = bytes((b, g, r, a)) * w
+    pixels = row * h
+    header = struct.pack('<IIIHHIIIIII', 40, w, h * 2, 1, 32, 0, len(pixels), 0, 0, 0, 0)
+    mask_stride = ((w + 31) // 32) * 4
+    return header + pixels + (b'\\x00' * mask_stride * h)
+
+def write_ico(path, sizes):
+    images = [ico_bitmap(sz, sz) for sz in sizes]
+    header = struct.pack('<HHH', 0, 1, len(images))
+    offset = 6 + 16 * len(images)
+    entries = []
+    for sz, data in zip(sizes, images):
+        width_byte = 0 if sz >= 256 else sz
+        entries.append(struct.pack('<BBBBHHII', width_byte, width_byte, 0, 0, 1, 32, len(data), offset))
+        offset += len(data)
+    with open(path, 'wb') as f:
+        f.write(header + b''.join(entries) + b''.join(images))
+
+def write_icns(path, items):
+    chunks = []
+    for kind, png_path in items:
+        data = open(png_path, 'rb').read()
+        chunks.append(kind.encode('ascii') + struct.pack('>I', len(data) + 8) + data)
+    body = b''.join(chunks)
+    with open(path, 'wb') as f:
+        f.write(b'icns' + struct.pack('>I', len(body) + 8) + body)
+
+for sz, nm in [(32,'32x32.png'),(128,'128x128.png'),(256,'128x128@2x.png')]:
     rgba_png(sz, sz, f'$ICON_DIR/{nm}')
+write_ico(f'$ICON_DIR/icon.ico', [32, 128, 256])
+write_icns(f'$ICON_DIR/icon.icns', [
+    ('icp5', f'$ICON_DIR/32x32.png'),
+    ('ic07', f'$ICON_DIR/128x128.png'),
+    ('ic08', f'$ICON_DIR/128x128@2x.png'),
+])
 " 2>/dev/null || warn "图标生成失败（非致命，使用 ImageMagick 备选）"
 fi
 
