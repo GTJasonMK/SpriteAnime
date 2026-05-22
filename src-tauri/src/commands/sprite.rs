@@ -367,6 +367,7 @@ pub async fn probe_video_file(
 
 /// 用 ffmpeg 从视频中按时间均匀抽取 PNG 帧。
 #[command]
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_video_frames_with_ffmpeg(
     state: State<'_, AppState>,
     channel: Channel<VideoExtractEvent>,
@@ -749,9 +750,8 @@ fn extract_video_frames_one_by_one(
 
     let mut frames: Vec<Option<VideoFrameFile>> = (0..total).map(|_| None).collect();
     let mut errors = Vec::new();
-    let mut completed = 0usize;
-    for result in rx {
-        completed += 1;
+    for (completed_index, result) in rx.into_iter().enumerate() {
+        let completed = completed_index + 1;
         match result {
             Ok(frame) => {
                 let _ = channel.send(VideoExtractEvent::ExtractingFrame {
@@ -1899,9 +1899,11 @@ mod tests {
 
     #[test]
     fn test_video_tool_commands_use_configured_paths() {
-        let mut config = UserConfig::default();
-        config.ffmpeg_path = " /opt/video/bin/ffmpeg ".into();
-        config.ffprobe_path = " /opt/video/bin/ffprobe ".into();
+        let config = UserConfig {
+            ffmpeg_path: " /opt/video/bin/ffmpeg ".into(),
+            ffprobe_path: " /opt/video/bin/ffprobe ".into(),
+            ..Default::default()
+        };
 
         let tools = video_tool_commands_from_config(&config);
 
@@ -1931,8 +1933,10 @@ mod tests {
         std::fs::write(&ffmpeg_path, "").unwrap();
         std::fs::write(&ffprobe_path, "").unwrap();
 
-        let mut config = UserConfig::default();
-        config.ffmpeg_path = ffmpeg_path.to_string_lossy().to_string();
+        let config = UserConfig {
+            ffmpeg_path: ffmpeg_path.to_string_lossy().to_string(),
+            ..Default::default()
+        };
         let tools = video_tool_commands_from_config(&config);
 
         assert_eq!(tools.ffmpeg, ffmpeg_path.to_string_lossy().to_string());

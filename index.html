@@ -180,6 +180,11 @@
                 <label for="ffprobe-path">FFprobe 路径</label>
                 <input type="text" id="ffprobe-path" placeholder="可选；留空则使用 ffmpeg 同目录或自动检测" autocomplete="off" />
               </div>
+              <div class="tool-actions">
+                <button id="btn-check-ffmpeg-tools" class="btn-sm" type="button">检测工具</button>
+                <button id="btn-download-ffmpeg-tools" class="btn-sm" type="button">下载并配置</button>
+              </div>
+              <div id="ffmpeg-tool-status" class="config-check-status" aria-live="polite">下载会安装到应用旁数据目录，并自动写入 FFmpeg/FFprobe 路径；代理留空时使用系统代理。</div>
             </div>
           </section>
         </div>

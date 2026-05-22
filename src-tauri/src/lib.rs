@@ -151,6 +151,8 @@ pub fn run() {
             commands::sprite::probe_video_file,
             commands::sprite::extract_video_frames_with_ffmpeg,
             commands::sprite::log_video_sprite_message,
+            commands::tools::check_ffmpeg_tools,
+            commands::tools::download_ffmpeg_tools,
             commands::filesystem::open_image_file,
             commands::filesystem::open_video_file,
             commands::filesystem::import_image_to_library,

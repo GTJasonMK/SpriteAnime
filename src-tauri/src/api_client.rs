@@ -420,6 +420,7 @@ pub async fn check_models_api_connection(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_responses_api(
     api_base: &str,
     api_key: &str,
@@ -487,6 +488,7 @@ pub async fn call_responses_api(
     read_responses_stream_images(resp, count).await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_chat_completions_image_api(
     api_base: &str,
     api_key: &str,
@@ -2151,7 +2153,7 @@ fn extract_data_image_urls(value: &str) -> Vec<String> {
             .unwrap_or(candidate.len());
         urls.push(
             candidate[..end]
-                .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';'))
+                .trim_end_matches(['.', ',', ';'])
                 .to_string(),
         );
         rest = &candidate[end..];
@@ -2171,7 +2173,7 @@ fn extract_data_video_urls(value: &str) -> Vec<String> {
             .unwrap_or(candidate.len());
         urls.push(
             candidate[..end]
-                .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';'))
+                .trim_end_matches(['.', ',', ';'])
                 .to_string(),
         );
         rest = &candidate[end..];
@@ -2192,7 +2194,7 @@ fn extract_http_urls(value: &str) -> Vec<String> {
                 .unwrap_or(candidate.len());
             urls.push(
                 candidate[..end]
-                    .trim_end_matches(|ch| matches!(ch, '.' | ',' | ';' | ':'))
+                    .trim_end_matches(['.', ',', ';', ':'])
                     .to_string(),
             );
             rest = &candidate[end..];

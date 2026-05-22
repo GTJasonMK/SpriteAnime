@@ -7,6 +7,8 @@ import {
   importConfig,
   checkGenerationApi,
   checkPromptOptimizerApi,
+  checkFfmpegTools,
+  downloadFfmpegTools,
   generateImage,
   getPromptHistory,
   addPromptHistory,
@@ -26,6 +28,7 @@ import {
   type UserConfig,
   type ApiProfile,
   type ApiCheckResult,
+  type FfmpegToolStatus,
   type GenerateEvent,
   type GenerationResult,
   type WorkbenchRecord,
@@ -140,6 +143,7 @@ export class GeneratorPage {
   private mattingRedoStack: ImageData[] = [];
   private referenceImagePath: string = "";
   private referenceImageName: string = "";
+  private isInstallingFfmpeg: boolean = false;
 
   // DOM元素缓存
   private els!: {
@@ -188,6 +192,9 @@ export class GeneratorPage {
     saveDir: HTMLInputElement;
     ffmpegPath: HTMLInputElement;
     ffprobePath: HTMLInputElement;
+    checkFfmpegTools: HTMLButtonElement;
+    downloadFfmpegTools: HTMLButtonElement;
+    ffmpegToolStatus: HTMLElement;
     generate: HTMLButtonElement;
     viewImage: HTMLButtonElement;
     openDir: HTMLButtonElement;
@@ -326,6 +333,9 @@ export class GeneratorPage {
       saveDir: getById<HTMLInputElement>("save-dir-input"),
       ffmpegPath: getById<HTMLInputElement>("ffmpeg-path"),
       ffprobePath: getById<HTMLInputElement>("ffprobe-path"),
+      checkFfmpegTools: getById<HTMLButtonElement>("btn-check-ffmpeg-tools"),
+      downloadFfmpegTools: getById<HTMLButtonElement>("btn-download-ffmpeg-tools"),
+      ffmpegToolStatus: getById("ffmpeg-tool-status"),
       generate: getById<HTMLButtonElement>("btn-generate"),
       viewImage: getById<HTMLButtonElement>("btn-view-image"),
       openDir: getById<HTMLButtonElement>("btn-open-dir"),
@@ -934,6 +944,14 @@ export class GeneratorPage {
       this.handleCheckPromptOptimizerApi();
     });
 
+    this.els.checkFfmpegTools.addEventListener("click", () => {
+      this.handleCheckFfmpegTools();
+    });
+
+    this.els.downloadFfmpegTools.addEventListener("click", () => {
+      this.handleDownloadFfmpegTools();
+    });
+
     this.els.settingsTabs.forEach((tab) => {
       tab.addEventListener("click", () => {
         this.showSettingsTab(tab.dataset.settingsTab || "profiles");
@@ -1270,6 +1288,77 @@ export class GeneratorPage {
     );
   }
 
+  private async handleCheckFfmpegTools(): Promise<void> {
+    if (this.els.checkFfmpegTools.disabled || this.isInstallingFfmpeg) return;
+    const originalText = this.els.checkFfmpegTools.textContent || "检测工具";
+    this.els.checkFfmpegTools.disabled = true;
+    this.els.checkFfmpegTools.textContent = "检测中";
+    this.setFfmpegToolStatus("checking", "正在检测 FFmpeg/FFprobe...");
+    this.els.toolbarStatus.textContent = "正在检测 FFmpeg...";
+
+    try {
+      await this.saveCurrentConfig();
+      const status = await checkFfmpegTools();
+      this.setFfmpegToolStatus(status.available ? "ok" : "warning", status.message, status);
+      this.els.toolbarStatus.textContent = status.available ? "FFmpeg 可用" : "FFmpeg 未配置";
+    } catch (err) {
+      this.setFfmpegToolStatus("error", `检测失败：${String(err)}`);
+      this.els.toolbarStatus.textContent = "FFmpeg 检测失败";
+      console.error("[generator] FFmpeg 检测失败:", err);
+    } finally {
+      this.els.checkFfmpegTools.textContent = originalText;
+      this.syncWorkflowControls();
+    }
+  }
+
+  private async handleDownloadFfmpegTools(): Promise<void> {
+    if (this.els.downloadFfmpegTools.disabled || this.isInstallingFfmpeg) return;
+    const ok = window.confirm("将下载 FFmpeg/FFprobe 到应用旁数据目录，并自动写入当前配置。继续？");
+    if (!ok) return;
+
+    const originalText = this.els.downloadFfmpegTools.textContent || "下载并配置";
+    this.isInstallingFfmpeg = true;
+    this.els.downloadFfmpegTools.textContent = "下载中";
+    this.setFfmpegToolStatus("checking", "正在下载并安装 FFmpeg，这可能需要几分钟...");
+    this.els.toolbarStatus.textContent = "正在下载 FFmpeg...";
+    this.syncWorkflowControls();
+
+    try {
+      await this.saveCurrentConfig();
+      const result = await downloadFfmpegTools();
+      this.els.ffmpegPath.value = result.ffmpeg_path;
+      this.els.ffprobePath.value = result.ffprobe_path;
+      if (this.config) {
+        this.config.ffmpeg_path = result.ffmpeg_path;
+        this.config.ffprobe_path = result.ffprobe_path;
+      }
+      await this.saveCurrentConfig();
+      this.setFfmpegToolStatus(
+        "ok",
+        `FFmpeg 已安装并配置。来源：${result.source}；目录：${result.install_dir}`,
+        {
+          available: true,
+          download_supported: true,
+          ffmpeg_path: result.ffmpeg_path,
+          ffprobe_path: result.ffprobe_path,
+          install_dir: result.install_dir,
+          message: "FFmpeg 已安装并配置。",
+          ffmpeg_version: result.ffmpeg_version,
+          ffprobe_version: result.ffprobe_version,
+        }
+      );
+      this.els.toolbarStatus.textContent = "FFmpeg 已安装";
+    } catch (err) {
+      this.setFfmpegToolStatus("error", `下载或安装失败：${String(err)}`);
+      this.els.toolbarStatus.textContent = "FFmpeg 安装失败";
+      console.error("[generator] FFmpeg 下载或安装失败:", err);
+    } finally {
+      this.isInstallingFfmpeg = false;
+      this.els.downloadFfmpegTools.textContent = originalText;
+      this.syncWorkflowControls();
+    }
+  }
+
   private async runApiCheck(
     button: HTMLButtonElement,
     statusEl: HTMLElement,
@@ -1309,6 +1398,26 @@ export class GeneratorPage {
     statusEl.textContent = message;
     statusEl.title = result
       ? `Endpoint: ${result.endpoint}${result.model ? `\nModel: ${result.model}` : ""}`
+      : "";
+  }
+
+  private setFfmpegToolStatus(
+    status: "ok" | "warning" | "error" | "checking",
+    message: string,
+    result?: FfmpegToolStatus
+  ): void {
+    this.els.ffmpegToolStatus.className = `config-check-status ${status}`;
+    this.els.ffmpegToolStatus.textContent = message;
+    this.els.ffmpegToolStatus.title = result
+      ? [
+          `FFmpeg: ${result.ffmpeg_path}`,
+          `FFprobe: ${result.ffprobe_path}`,
+          `Install dir: ${result.install_dir}`,
+          result.ffmpeg_version ? `FFmpeg version: ${result.ffmpeg_version}` : "",
+          result.ffprobe_version ? `FFprobe version: ${result.ffprobe_version}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
       : "";
   }
 
@@ -2262,6 +2371,8 @@ export class GeneratorPage {
       this.els.saveDir,
       this.els.ffmpegPath,
       this.els.ffprobePath,
+      this.els.checkFfmpegTools,
+      this.els.downloadFfmpegTools,
       this.els.toggleKey,
       this.els.saveConfig,
       this.els.importConfig,
@@ -2269,6 +2380,8 @@ export class GeneratorPage {
     ].forEach((control) => {
       control.disabled = !permissions.openSettings;
     });
+    this.els.checkFfmpegTools.disabled = !permissions.openSettings || this.isInstallingFfmpeg;
+    this.els.downloadFfmpegTools.disabled = !permissions.openSettings || this.isInstallingFfmpeg;
     this.els.deleteApiProfile.disabled =
       !permissions.openSettings || (this.config?.api_profiles.length || 0) <= 1;
   }

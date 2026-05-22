@@ -2020,6 +2020,17 @@ input[type="checkbox"] {
   margin-top: 8px;
 }
 
+.tool-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.tool-actions .btn-sm {
+  justify-content: center;
+}
+
 .checkbox-row {
   display: inline-flex;
   align-items: center;

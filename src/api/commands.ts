@@ -228,6 +228,26 @@ export interface ImportedConfigResult {
   config: UserConfig;
 }
 
+export interface FfmpegToolStatus {
+  available: boolean;
+  download_supported: boolean;
+  ffmpeg_path: string;
+  ffprobe_path: string;
+  install_dir: string;
+  message: string;
+  ffmpeg_version?: string | null;
+  ffprobe_version?: string | null;
+}
+
+export interface FfmpegToolInstallResult {
+  ffmpeg_path: string;
+  ffprobe_path: string;
+  install_dir: string;
+  source: string;
+  ffmpeg_version: string;
+  ffprobe_version: string;
+}
+
 // ==================== 预设与配置 ====================
 
 export async function getPresets(): Promise<PresetsPayload> {
@@ -276,6 +296,14 @@ export async function checkPromptOptimizerApi(
     model,
     proxyUrl,
   });
+}
+
+export async function checkFfmpegTools(): Promise<FfmpegToolStatus> {
+  return invoke<FfmpegToolStatus>("check_ffmpeg_tools");
+}
+
+export async function downloadFfmpegTools(): Promise<FfmpegToolInstallResult> {
+  return invoke<FfmpegToolInstallResult>("download_ffmpeg_tools");
 }
 
 // ==================== 生成图片 ====================

@@ -19,6 +19,7 @@ output/
 
 # Local runtime data
 config.json
+sprite-animte-config*.json
 SpriteAnimteData/
 logs/
 src-tauri/logs/
