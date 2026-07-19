@@ -1,0 +1,188 @@
+    <!-- ==================== 序列帧预览页面 ==================== -->
+    <section id="page-sprite" class="task-surface">
+      <div class="sprite-layout">
+        <aside class="sprite-inspector">
+          <section class="sprite-panel" data-task-stage="source">
+            <div class="panel-heading">
+              <span>源图</span>
+            </div>
+            <div class="form-group">
+              <label for="sprite-image-select">图片源</label>
+              <div class="source-row">
+                <select id="sprite-image-select">
+                  <option value="">-- 请先选择或生成图片 --</option>
+                </select>
+              </div>
+            </div>
+            <div class="split-actions">
+            </div>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="grid">
+            <div class="panel-heading">
+              <span>网格</span>
+              <button id="btn-reset-grid-lines" class="btn-sm" type="button" title="将网格线恢复为均匀分配">均分</button>
+            </div>
+            <div class="grid-size-row">
+              <div class="form-group">
+                <label for="rows-input">行数</label>
+                <input type="number" id="rows-input" value="3" min="1" max="20" class="input-sm" />
+              </div>
+              <div class="form-group">
+                <label for="cols-input">列数</label>
+                <input type="number" id="cols-input" value="4" min="1" max="20" class="input-sm" />
+              </div>
+            </div>
+            <div class="grid-preset-row">
+              <button class="btn-sm grid-preset" type="button" data-rows="3" data-cols="4">3×4</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="4" data-cols="6">4×6</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="2" data-cols="4">2×4</button>
+              <button class="btn-sm grid-preset" type="button" data-rows="4" data-cols="4">4×4</button>
+            </div>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="grid">
+            <div class="panel-heading">
+              <span>切分区域</span>
+              <button id="btn-region-full" class="btn-sm" type="button">整图</button>
+            </div>
+            <div class="region-grid">
+              <label class="region-field">
+                <span>X</span>
+                <input type="number" id="region-x-input" value="0" min="0" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>Y</span>
+                <input type="number" id="region-y-input" value="0" min="0" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>W</span>
+                <input type="number" id="region-w-input" value="0" min="1" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>H</span>
+                <input type="number" id="region-h-input" value="0" min="1" class="input-sm" />
+              </label>
+            </div>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="bounds">
+            <div class="panel-heading">
+              <div class="boundary-heading-options">
+                <label class="auto-trim-toggle">
+                  <input type="checkbox" id="auto-trim-checkbox" />
+                  自动边界
+                </label>
+                <label class="auto-trim-toggle auto-expand-toggle" id="auto-expand-toggle">
+                  <input type="checkbox" id="auto-expand-checkbox" />
+                  允许扩展
+                </label>
+              </div>
+              <button id="btn-detect-bounds" class="btn-sm" type="button">检测</button>
+            </div>
+            <div class="boundary-grid">
+              <label class="region-field sprite-auto-advanced">
+                <span>背景</span>
+                <select id="auto-bg-mode-select" class="input-compact">
+                  <option value="auto">自动</option>
+                  <option value="white">纯白</option>
+                </select>
+              </label>
+              <label class="region-field">
+                <span>裁切</span>
+                <select id="auto-trim-mode-select" class="input-compact">
+                  <option value="tight">逐帧</option>
+                  <option value="fixed">统一</option>
+                </select>
+              </label>
+              <label class="region-field sprite-auto-advanced">
+                <span>阈值</span>
+                <input type="number" id="auto-trim-threshold-input" value="32" min="1" max="255" class="input-sm" />
+              </label>
+            </div>
+            <div class="boundary-actions">
+              <button id="btn-boundary-add" class="btn-sm" type="button">新增</button>
+              <button id="btn-boundary-edit" class="btn-sm" type="button" disabled>编辑</button>
+              <button id="btn-boundary-delete" class="btn-sm" type="button" disabled>删除</button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="sprite-main" data-task-stage="source grid bounds preview">
+          <div class="preview-meta-bar">
+            <span class="frame-info" id="frame-size-info">尺寸: -</span>
+          </div>
+          <div class="preview-area">
+            <canvas id="preview-canvas"></canvas>
+            <div class="preview-placeholder" id="preview-placeholder">动画预览区域</div>
+          </div>
+          <div class="playback-controls">
+            <button id="btn-prev-frame" class="btn-sm">上一帧</button>
+            <button id="btn-play-pause" class="btn-primary">播放</button>
+            <button id="btn-next-frame" class="btn-sm">下一帧</button>
+            <div class="control-group">
+              <label>FPS</label>
+              <input type="range" id="fps-slider" min="1" max="60" value="24" />
+              <span id="fps-label">24</span>
+            </div>
+            <div class="control-group">
+              <label>缩放</label>
+              <input type="range" id="scale-slider" min="0.1" max="5" value="1" step="0.1" />
+              <span id="scale-label">1.0x</span>
+            </div>
+            <span class="frame-info" id="frame-info">帧: 0/0</span>
+          </div>
+        </section>
+
+        <aside class="sprite-sidebar" data-task-stage="bounds preview">
+          <div class="frames-header">
+            <span>帧列表</span>
+          </div>
+          <div class="sidebar-toolbar">
+            <button id="btn-select-all" class="btn-sm">全选</button>
+            <button id="btn-invert" class="btn-sm">反选</button>
+            <button id="btn-clear-sel" class="btn-sm">清空</button>
+          </div>
+          <div class="boundary-sidebar-panel" id="boundary-editor-panel">
+            <div class="boundary-sidebar-header">
+              <span id="boundary-editor-title">边界框</span>
+              <button id="btn-boundary-editor-close" class="btn-icon-sm" type="button" title="取消选择">×</button>
+            </div>
+            <div class="boundary-editor-grid">
+              <label class="region-field">
+                <span>左</span>
+                <input type="number" id="boundary-left-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>上</span>
+                <input type="number" id="boundary-top-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>右</span>
+                <input type="number" id="boundary-right-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>下</span>
+                <input type="number" id="boundary-bottom-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>定位针 X</span>
+                <input type="number" id="boundary-anchor-x-input" class="input-sm" disabled />
+              </label>
+              <label class="region-field">
+                <span>&nbsp;</span>
+                <button id="btn-boundary-anchor-center" class="btn-sm" type="button" disabled>居中</button>
+              </label>
+            </div>
+            <div class="boundary-editor-footer">
+              <button id="btn-boundary-editor-delete" class="btn-sm btn-danger-soft" type="button" disabled>删除</button>
+              <button id="btn-boundary-editor-cancel" class="btn-sm" type="button" disabled>取消</button>
+              <button id="btn-boundary-editor-apply" class="btn-primary" type="button" disabled>完成</button>
+            </div>
+          </div>
+          <div class="thumbnail-list" id="thumbnail-list">
+            <div class="placeholder-text">先预览网格，再拆分帧</div>
+          </div>
+        </aside>
+      </div>
+    </section>

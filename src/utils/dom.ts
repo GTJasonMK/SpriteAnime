@@ -17,13 +17,6 @@ export function queryOne<T extends Element = Element>(
   return element;
 }
 
-export function queryOptional<T extends Element = Element>(
-  selector: string,
-  root: ParentNode = document
-): T | null {
-  return root.querySelector<T>(selector);
-}
-
 export function queryAll<T extends Element = Element>(
   selector: string,
   root: ParentNode = document

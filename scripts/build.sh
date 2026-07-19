@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # 一键打包脚本 — 清理 + 构建 + 输出产物清单
-# 用法: ./scripts/build.sh [--clean|--release|--all]
+# 用法: ./scripts/build.sh [--clean|--release]
 # ============================================================
 set -euo pipefail
 
@@ -11,13 +11,24 @@ OUTPUT_DIR="$PROJECT_ROOT/output"
 BUILD_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle"
 
 MODE="${1:---release}"
+if [ "$#" -gt 1 ]; then
+    error "用法: ./scripts/build.sh [--clean|--release]"
+    exit 1
+fi
+case "$MODE" in
+    --clean|--release) ;;
+    *)
+        error "用法: ./scripts/build.sh [--clean|--release]"
+        exit 1
+        ;;
+esac
 
 banner "SpriteAnimte - 生产构建"
 
 cd "$PROJECT_ROOT"
 
 # ---- 清理 ----
-if [ "$MODE" = "--clean" ] || [ "$MODE" = "--all" ]; then
+if [ "$MODE" = "--clean" ]; then
     step "清理构建产物"
     rm -rf "$OUTPUT_DIR"
     rm -rf "$PROJECT_ROOT/dist"
@@ -26,40 +37,42 @@ if [ "$MODE" = "--clean" ] || [ "$MODE" = "--all" ]; then
     info "清理完成"
 fi
 
-# ---- 前端构建 ----
-step "构建前端 (Vite)"
-run_vite_build 0
-info "前端构建完成 → dist/"
-
-# ---- Rust Release 构建 ----
-step "构建 Rust Release 二进制"
-run_cargo_build release 5
-BINARY="$PROJECT_ROOT/src-tauri/target/release/sprite-anime"
-if [ -f "$BINARY" ]; then
-    SIZE=$(du -h "$BINARY" | cut -f1)
-    info "二进制构建完成 → $SIZE"
-else
-    error "二进制构建失败"
-    exit 1
-fi
-
 # ---- Tauri Bundle ----
 step "打包 Tauri 安装包"
 cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
 rm -rf "$BUILD_DIR"
+node "$PROJECT_ROOT/scripts/prepare-cli-sidecar.mjs" --release
 TAURI_BUILD_LOG="$PROJECT_ROOT/logs/tauri-build.log"
-if npx tauri build --bundles deb,rpm,appimage 2>&1 | tee "$TAURI_BUILD_LOG"; then
+if npx tauri build -c src-tauri/tauri.sidecar.conf.json --bundles deb,rpm,appimage 2>&1 | tee "$TAURI_BUILD_LOG"; then
     grep -E "(Bundling|Finished|error|Bundle)" "$TAURI_BUILD_LOG" | tail -10 || true
 else
     error "Tauri 打包失败，详见 logs/tauri-build.log"
     exit 1
 fi
 
-if [ -d "$BUILD_DIR/appimage" ]; then
-    step "修正 AppImage 启动环境"
-    bash "$PROJECT_ROOT/scripts/postprocess-appimage.sh" "$BUILD_DIR/appimage"
+BINARY="$PROJECT_ROOT/src-tauri/target/release/sprite-anime"
+CLI_BINARY="$PROJECT_ROOT/src-tauri/target/release/sprite-anime-cli"
+if [ ! -f "$BINARY" ]; then
+    error "Tauri 构建完成但缺少 release 二进制"
+    exit 1
 fi
+if [ ! -f "$CLI_BINARY" ]; then
+    error "CLI 构建完成但缺少 release 二进制"
+    exit 1
+fi
+SIZE=$(du -h "$BINARY" | cut -f1)
+info "二进制构建完成 → $SIZE"
+
+for bundle_dir in deb rpm appimage; do
+    if [ ! -d "$BUILD_DIR/$bundle_dir" ]; then
+        error "Tauri 构建完成但缺少 $bundle_dir 产物目录"
+        exit 1
+    fi
+done
+
+step "修正 AppImage 启动环境"
+bash "$PROJECT_ROOT/scripts/postprocess-appimage.sh" "$BUILD_DIR/appimage"
 
 # ---- 收集产物 ----
 step "收集构建产物"
@@ -69,41 +82,38 @@ rm -rf "$OUTPUT_DIR"/*
 # 复制二进制
 cp "$BINARY" "$OUTPUT_DIR/sprite-anime"
 info "二进制: output/sprite-anime"
+cp "$CLI_BINARY" "$OUTPUT_DIR/sprite-anime-cli"
+tar -czf "$OUTPUT_DIR/sprite-anime-cli-linux-$(uname -m).tar.gz" \
+    -C "$OUTPUT_DIR" sprite-anime-cli
+info "CLI: output/sprite-anime-cli"
 
-# 复制 deb
-if [ -d "$BUILD_DIR/deb" ]; then
-    cp "$BUILD_DIR/deb"/*.deb "$OUTPUT_DIR/" 2>/dev/null || true
-    DEB_FILE=$(ls "$OUTPUT_DIR"/*.deb 2>/dev/null | head -1)
-    if [ -n "$DEB_FILE" ]; then
-        info "DEB 包: $(basename "$DEB_FILE") ($(du -h "$DEB_FILE" | cut -f1))"
+copy_bundle_artifacts() {
+    local bundle_dir=$1 pattern=$2 label=$3
+    local files=("$BUILD_DIR/$bundle_dir"/$pattern)
+    if [ "${#files[@]}" -eq 0 ]; then
+        error "$bundle_dir 目录中缺少 $pattern 产物"
+        exit 1
     fi
-fi
+    cp "${files[@]}" "$OUTPUT_DIR/"
+    for file in "${files[@]}"; do
+        info "$label: $(basename "$file") ($(du -h "$file" | cut -f1))"
+    done
+}
 
-# 复制 rpm
-if [ -d "$BUILD_DIR/rpm" ]; then
-    cp "$BUILD_DIR/rpm"/*.rpm "$OUTPUT_DIR/" 2>/dev/null || true
-    RPM_FILE=$(ls "$OUTPUT_DIR"/*.rpm 2>/dev/null | head -1)
-    if [ -n "$RPM_FILE" ]; then
-        info "RPM 包: $(basename "$RPM_FILE") ($(du -h "$RPM_FILE" | cut -f1))"
-    fi
-fi
-
-# 复制 AppImage（如果存在）
-if [ -d "$BUILD_DIR/appimage" ]; then
-    cp "$BUILD_DIR/appimage"/*.AppImage "$OUTPUT_DIR/" 2>/dev/null || true
-    AI_FILE=$(ls "$OUTPUT_DIR"/*.AppImage 2>/dev/null | head -1)
-    if [ -n "$AI_FILE" ]; then
-        info "AppImage: $(basename "$AI_FILE") ($(du -h "$AI_FILE" | cut -f1))"
-    fi
-fi
+shopt -s nullglob
+copy_bundle_artifacts deb "*.deb" "DEB 包"
+copy_bundle_artifacts rpm "*.rpm" "RPM 包"
+copy_bundle_artifacts appimage "*.AppImage" "AppImage"
+shopt -u nullglob
 
 # ---- 生成版本信息 ----
-GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_HASH=$(git rev-parse --short HEAD)
+VERSION=$(node -e "console.log(require(process.argv[1]).version)" "$PROJECT_ROOT/src-tauri/tauri.conf.json")
 BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 {
     echo "SpriteAnimte 构建信息"
     echo "====================="
-    echo "版本: 0.1.0"
+    echo "版本: $VERSION"
     echo "构建时间: $BUILD_TIME"
     echo "Git Commit: $GIT_HASH"
     echo "Rust: $(rustc --version)"

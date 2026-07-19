@@ -12,12 +12,12 @@ const root = getRepoRoot(import.meta.url);
 const outDir = resetTempDir("spriteanime-workflow-tests");
 const require = createRequire(import.meta.url);
 
-compileCommonJsModule(root, outDir, "src/pages/workflow-permissions.ts");
+compileCommonJsModule(root, outDir, "src/workflows/permissions.ts");
 const generatorWorkflow = require(
-  compileCommonJsModule(root, outDir, "src/pages/generator-workflow.ts")
+  compileCommonJsModule(root, outDir, "src/features/image/workflow.ts")
 );
 const spriteWorkflow = require(
-  compileCommonJsModule(root, outDir, "src/pages/sprite/workflow-state.ts")
+  compileCommonJsModule(root, outDir, "src/features/sprite/workflow-state.ts")
 );
 
 function testGeneratorWorkflow() {
@@ -44,7 +44,6 @@ function testGeneratorWorkflow() {
   });
   assert.equal(ready.generate, true);
   assert.equal(ready.enterMatting, true);
-  assert.equal(ready.sendToSprite, true);
   assert.equal(ready.clearRecords, true);
   assert.equal(ready.saveMatting, false);
 
@@ -57,7 +56,6 @@ function testGeneratorWorkflow() {
     hasMattingRedo: true,
   });
   assert.equal(generating.generate, false);
-  assert.equal(generating.openSettings, false);
   assert.equal(generating.clearRecords, false);
 
   const matting = generatorWorkflow.getGeneratorWorkflowPermissions("matting", {
@@ -135,7 +133,6 @@ function testSpriteWorkflow() {
     hasImage: true,
     hasFrames: true,
   });
-  assert.equal(split.returnToGrid, true);
   assert.equal(split.playFrames, true);
   assert.equal(split.exportFrames, true);
   assert.equal(split.editGrid, false);

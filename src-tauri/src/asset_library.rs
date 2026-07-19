@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::path_safety::sanitize_file_name_component;
+
 static ASSET_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy)]
@@ -14,17 +16,6 @@ pub enum AssetCategory {
     ExportedFrameSets,
     ExportedGifs,
 }
-
-const STANDARD_CATEGORIES: [AssetCategory; 8] = [
-    AssetCategory::GeneratedImages,
-    AssetCategory::ImportedImages,
-    AssetCategory::MattedImages,
-    AssetCategory::OriginalVideos,
-    AssetCategory::GeneratedVideos,
-    AssetCategory::VideoSpriteSheets,
-    AssetCategory::ExportedFrameSets,
-    AssetCategory::ExportedGifs,
-];
 
 impl AssetCategory {
     pub fn dir_name(self) -> &'static str {
@@ -41,35 +32,15 @@ impl AssetCategory {
     }
 }
 
-pub fn root_dir(default_save_dir: &Path, configured_save_dir: &str) -> PathBuf {
-    let _ = configured_save_dir;
-    default_save_dir.to_path_buf()
-}
-
-pub fn category_dir(
-    default_save_dir: &Path,
-    configured_save_dir: &str,
-    category: AssetCategory,
-) -> Result<PathBuf, String> {
-    let dir = root_dir(default_save_dir, configured_save_dir).join(category.dir_name());
+pub fn category_dir(default_save_dir: &Path, category: AssetCategory) -> Result<PathBuf, String> {
+    let dir = default_save_dir.join(category.dir_name());
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建素材目录失败: {}", e))?;
     Ok(dir)
-}
-
-pub fn ensure_standard_dirs(
-    default_save_dir: &Path,
-    configured_save_dir: &str,
-) -> Result<Vec<PathBuf>, String> {
-    STANDARD_CATEGORIES
-        .into_iter()
-        .map(|category| category_dir(default_save_dir, configured_save_dir, category))
-        .collect()
 }
 
 pub fn copy_file_to_category(
     source_path: &str,
     default_save_dir: &Path,
-    configured_save_dir: &str,
     category: AssetCategory,
 ) -> Result<PathBuf, String> {
     let source = Path::new(source_path);
@@ -77,79 +48,64 @@ pub fn copy_file_to_category(
         return Err("源文件不存在或不是普通文件".into());
     }
 
-    let output_dir = category_dir(default_save_dir, configured_save_dir, category)?;
-    if is_already_inside_dir(source, &output_dir) {
+    let output_dir = category_dir(default_save_dir, category)?;
+    if is_already_inside_dir(source, &output_dir)? {
         return Ok(source.to_path_buf());
     }
 
-    let stem = source
-        .file_stem()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "asset".into());
+    let stem = required_source_file_stem(source)?;
+    let safe_stem = required_sanitized_path_segment(&stem, "素材文件名")?;
     let extension = source
         .extension()
         .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty());
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| "素材文件缺少扩展名".to_string())?;
+    let safe_extension = required_sanitized_path_segment(&extension, "素材扩展名")?;
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
     let nonce = ASSET_COPY_COUNTER.fetch_add(1, Ordering::Relaxed) % 10_000;
-    let file_name = match extension {
-        Some(extension) => format!(
-            "{}_{}_{:04}.{}",
-            sanitize_path_segment(&stem),
-            timestamp,
-            nonce,
-            sanitize_path_segment(&extension)
-        ),
-        None => format!(
-            "{}_{}_{:04}",
-            sanitize_path_segment(&stem),
-            timestamp,
-            nonce
-        ),
-    };
+    let file_name = format!(
+        "{}_{}_{:04}.{}",
+        safe_stem, timestamp, nonce, safe_extension
+    );
     let dest = output_dir.join(file_name);
     std::fs::copy(source, &dest).map_err(|e| format!("复制素材文件失败: {}", e))?;
     Ok(dest)
 }
 
-fn is_already_inside_dir(source: &Path, dir: &Path) -> bool {
-    let Some(source_parent) = source.parent() else {
-        return false;
-    };
-    let Ok(source_parent) = source_parent.canonicalize() else {
-        return false;
-    };
-    let Ok(dir) = dir.canonicalize() else {
-        return false;
-    };
-    source_parent == dir
+fn is_already_inside_dir(source: &Path, dir: &Path) -> Result<bool, String> {
+    let source_parent = source
+        .parent()
+        .ok_or_else(|| "源文件缺少父目录".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("读取源文件父目录失败: {e}"))?;
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("读取素材目录失败: {e}"))?;
+    Ok(source_parent == dir)
 }
 
-fn sanitize_path_segment(value: &str) -> String {
-    let sanitized: String = value
-        .chars()
-        .filter_map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                Some(ch.to_ascii_lowercase())
-            } else if ch == '-' || ch == '_' {
-                Some(ch)
-            } else if ch == '.' || ch.is_whitespace() {
-                Some('_')
-            } else {
-                None
-            }
+fn required_source_file_stem(source: &Path) -> Result<String, String> {
+    source
+        .file_stem()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| {
+            "素材文件缺少可用文件名。解决方法：请把源文件重命名为包含文件名的本地文件后重新导入。"
+                .into()
         })
+}
+
+fn required_sanitized_path_segment(value: &str, label: &str) -> Result<String, String> {
+    let sanitized: String = sanitize_file_name_component(value)
+        .chars()
+        .take(48)
         .collect();
-    let collapsed = sanitized
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-    if collapsed.is_empty() {
-        "asset".into()
+    if sanitized.is_empty() {
+        Err(format!(
+            "{label}清洗后为空。解决方法：请把文件名改为包含有效字符的名称后重新导入。"
+        ))
     } else {
-        collapsed.chars().take(48).collect()
+        Ok(sanitized)
     }
 }
 
@@ -158,16 +114,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn root_dir_always_uses_portable_default() {
-        let root = std::env::temp_dir().join("sprite-asset-root");
-        let default = std::env::temp_dir().join("sprite-default-root");
-        let dir = root_dir(&default, &root.to_string_lossy());
-        assert_eq!(dir, default);
+    fn shared_sanitizer_keeps_unicode_asset_names() {
+        assert_eq!(
+            required_sanitized_path_segment("角色:奔跑", "素材文件名").unwrap(),
+            "角色_奔跑"
+        );
     }
 
     #[test]
-    fn sanitize_path_segment_keeps_safe_ascii() {
-        assert_eq!(sanitize_path_segment("My Asset-01.png"), "my_asset-01_png");
-        assert_eq!(sanitize_path_segment("角色"), "asset");
+    fn required_sanitized_path_segment_rejects_empty_result_with_resolution_steps() {
+        let err = required_sanitized_path_segment(" ._-_ ", "素材文件名").unwrap_err();
+
+        assert!(err.contains("素材文件名清洗后为空"));
+        assert!(err.contains("有效字符"));
+        assert!(err.contains("重新导入"));
+    }
+
+    #[test]
+    fn required_source_file_stem_rejects_missing_file_stem_with_resolution_steps() {
+        let err = required_source_file_stem(Path::new("/")).unwrap_err();
+
+        assert!(err.contains("素材文件缺少可用文件名"));
+        assert!(err.contains("重命名"));
     }
 }

@@ -1,4 +1,10 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { nextFrame } from "../utils/async";
+
+interface FrameSource {
+  path: string;
+  anchorX: number;
+}
 
 /// Canvas动画播放器，使用ImageBitmap预解码实现高性能帧动画
 export class CanvasPlayer {
@@ -20,26 +26,19 @@ export class CanvasPlayer {
     this.ctx = ctx;
   }
 
-  /// 从路径或base64数据预解码所有帧
-  async loadFrames(frameDataList: { path?: string; base64?: string; anchorX?: number }[]): Promise<void> {
-    // 释放旧帧
-    this.frames.forEach((f) => f.close());
-    this.frames = [];
-    this.anchorsX = [];
-    this.frameWidth = 0;
-    this.frameHeight = 0;
-    this.anchorCanvasX = 0;
-    this.canvasWidth = 0;
-    this.canvasHeight = 0;
+  /// 从临时帧路径预解码所有帧
+  async loadFrames(frameDataList: FrameSource[]): Promise<void> {
+    this.releaseFrames();
 
     this.frames = await decodeFrameBitmapsInBatches(frameDataList);
 
     if (this.frames.length > 0) {
       this.anchorsX = this.frames.map((frame, index) => {
-        const anchor = frameDataList[index]?.anchorX;
-        return Number.isFinite(anchor)
-          ? Math.max(0, Math.min(frame.width, Number(anchor)))
-          : frame.width / 2;
+        const anchor = frameDataList[index].anchorX;
+        if (!Number.isFinite(anchor)) {
+          throw new Error(`第 ${index + 1} 帧定位针无效`);
+        }
+        return Math.max(0, Math.min(frame.width, anchor));
       });
       const leftSpan = Math.max(...this.anchorsX);
       const rightSpan = Math.max(
@@ -69,7 +68,7 @@ export class CanvasPlayer {
     this.ctx.imageSmoothingEnabled = this.scale > 1.5;
     const drawW = Math.max(1, Math.round(frame.width * this.scale));
     const drawH = Math.max(1, Math.round(frame.height * this.scale));
-    const anchorX = this.anchorsX[index % this.frames.length] ?? frame.width / 2;
+    const anchorX = this.anchorsX[index % this.frames.length];
     const x = Math.round((this.anchorCanvasX - anchorX) * this.scale);
     const y = h - drawH;
     this.ctx.drawImage(frame, x, y, drawW, drawH);
@@ -80,7 +79,6 @@ export class CanvasPlayer {
     this.canvas.height = 1;
     this.canvasWidth = 1;
     this.canvasHeight = 1;
-    this.ctx.clearRect(0, 0, 1, 1);
   }
 
   setScale(s: number): void {
@@ -88,6 +86,10 @@ export class CanvasPlayer {
   }
 
   destroy(): void {
+    this.releaseFrames();
+  }
+
+  private releaseFrames(): void {
     this.frames.forEach((f) => f.close());
     this.frames = [];
     this.anchorsX = [];
@@ -99,20 +101,22 @@ export class CanvasPlayer {
   }
 }
 
-async function loadFrameBitmap(frame: { path?: string; base64?: string }): Promise<ImageBitmap> {
-  const src = frame.path
-    ? convertFileSrc(frame.path)
-    : `data:image/png;base64,${frame.base64 || ""}`;
+async function loadFrameBitmap(frame: FrameSource): Promise<ImageBitmap> {
+  const path = frame.path.trim();
+  if (!path) {
+    throw new Error("帧缺少临时路径，请重新拆分后再预览。");
+  }
+
   const image = new Image();
   image.decoding = "async";
   image.crossOrigin = "anonymous";
-  image.src = src;
+  image.src = convertFileSrc(path);
   await image.decode();
   return createImageBitmap(image);
 }
 
 async function decodeFrameBitmapsInBatches(
-  frames: { path?: string; base64?: string }[]
+  frames: FrameSource[]
 ): Promise<ImageBitmap[]> {
   const decoded: ImageBitmap[] = [];
   try {
@@ -120,7 +124,7 @@ async function decodeFrameBitmapsInBatches(
     for (let start = 0; start < frames.length; start += batchSize) {
       const batch = frames.slice(start, start + batchSize);
       decoded.push(...await decodeFrameBitmapBatch(batch));
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await nextFrame();
     }
     return decoded;
   } catch (err) {
@@ -130,7 +134,7 @@ async function decodeFrameBitmapsInBatches(
 }
 
 async function decodeFrameBitmapBatch(
-  frames: { path?: string; base64?: string }[]
+  frames: FrameSource[]
 ): Promise<ImageBitmap[]> {
   const results = await Promise.allSettled(frames.map(loadFrameBitmap));
   const decoded: ImageBitmap[] = [];

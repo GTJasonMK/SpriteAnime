@@ -10,14 +10,19 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "node scripts/prepare-cli-sidecar.mjs && tauri dev -c src-tauri/tauri.sidecar.conf.json",
+    "tauri:build": "node scripts/prepare-cli-sidecar.mjs --release && tauri build -c src-tauri/tauri.sidecar.conf.json",
+    "cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin sprite-anime-cli --",
+    "cli:build": "node scripts/prepare-cli-sidecar.mjs --release",
+    "check:cli": "cargo check --manifest-path src-tauri/Cargo.toml --bin sprite-anime-cli",
     "test:matting": "node scripts/test-matting-algorithm.mjs",
-    "test:bounds": "node scripts/test-bounds-detection.mjs",
     "test:workflow": "node scripts/test-workflow-state.mjs",
+    "test:redraw": "node scripts/test-video-sprite-redraw.mjs",
+    "test:workspace-ui": "node scripts/test-task-workspace.mjs",
+    "check:lines": "node scripts/check-line-limit.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
-    "test": "npm run typecheck && npm run test:matting && npm run test:bounds && npm run test:workflow && npm run test:rust"
+    "test": "npm run check:lines && npm run typecheck && npm run test:matting && npm run test:workflow && npm run test:redraw && npm run test:workspace-ui && npm run test:rust"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.0",

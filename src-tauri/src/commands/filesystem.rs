@@ -1,86 +1,70 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{command, State};
 
 use crate::asset_library::{self, AssetCategory};
 use crate::config::AppState;
-
-static TEMP_VIDEO_COUNTER: AtomicU64 = AtomicU64::new(0);
+use crate::path_safety::required_file_name;
+use crate::runtime::{DataLock, LockDomain};
 
 /// 文件打开结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileOpenResult {
     pub file_path: String,
     pub file_name: String,
-    pub base64_data: String,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct TempCleanupResult {
-    pub removed_files: usize,
     pub removed_dirs: usize,
 }
 
-impl TempCleanupResult {
-    fn add(&mut self, other: TempCleanupResult) {
-        self.removed_files += other.removed_files;
-        self.removed_dirs += other.removed_dirs;
-    }
-}
-
 /// 使用系统对话框选择图片文件并返回路径
+// 保持命令异步：对话框插件的阻塞选择器不能运行在 WebView 主线程。
 #[command]
 pub async fn open_image_file(app: tauri::AppHandle) -> Result<FileOpenResult, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let result = app
-        .dialog()
-        .file()
-        .add_filter("图片文件", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
-        .blocking_pick_file();
-
-    match result {
-        Some(file_path) => {
-            let path_str = file_path.to_string();
-            let file_name = std::path::Path::new(&path_str)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            Ok(FileOpenResult {
-                file_path: path_str,
-                file_name,
-                base64_data: String::new(),
-            })
-        }
-        None => Err("用户取消选择".into()),
-    }
+    pick_media_file(
+        &app,
+        "图片文件",
+        &["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+    )
 }
 
 /// 使用系统对话框选择视频文件并返回路径
 #[command]
 pub async fn open_video_file(app: tauri::AppHandle) -> Result<FileOpenResult, String> {
+    pick_media_file(
+        &app,
+        "视频文件",
+        &["mp4", "webm", "mov", "m4v", "avi", "mkv"],
+    )
+}
+
+fn pick_media_file(
+    app: &tauri::AppHandle,
+    label: &str,
+    extensions: &[&str],
+) -> Result<FileOpenResult, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let result = app
         .dialog()
         .file()
-        .add_filter("视频文件", &["mp4", "webm", "mov", "m4v", "avi", "mkv"])
+        .add_filter(label, extensions)
         .blocking_pick_file();
 
     match result {
         Some(file_path) => {
             let path_str = file_path.to_string();
-            let file_name = std::path::Path::new(&path_str)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            let file_name = required_file_name(
+                Path::new(&path_str),
+                label,
+                "请重新选择一个带文件名的本地文件，不要选择磁盘根目录、目录或虚拟路径。",
+            )?;
 
             Ok(FileOpenResult {
                 file_path: path_str,
                 file_name,
-                base64_data: String::new(),
             })
         }
         None => Err("用户取消选择".into()),
@@ -92,11 +76,13 @@ pub fn import_image_to_library(
     state: State<'_, AppState>,
     source_path: String,
 ) -> Result<FileOpenResult, String> {
+    let _lock = DataLock::exclusive(&state.locks_dir, LockDomain::Assets)
+        .map_err(|error| error.to_string())?;
     import_file_to_library(
         state,
         source_path,
         AssetCategory::ImportedImages,
-        "image.png",
+        "图片素材",
     )
 }
 
@@ -105,11 +91,13 @@ pub fn import_video_to_library(
     state: State<'_, AppState>,
     source_path: String,
 ) -> Result<FileOpenResult, String> {
+    let _lock = DataLock::exclusive(&state.locks_dir, LockDomain::Assets)
+        .map_err(|error| error.to_string())?;
     import_file_to_library(
         state,
         source_path,
         AssetCategory::OriginalVideos,
-        "video.mp4",
+        "视频素材",
     )
 }
 
@@ -117,94 +105,29 @@ fn import_file_to_library(
     state: State<'_, AppState>,
     source_path: String,
     category: AssetCategory,
-    fallback_name: &str,
+    context: &str,
 ) -> Result<FileOpenResult, String> {
-    let dest = {
-        let config = state.config.lock();
-        asset_library::copy_file_to_category(
-            &source_path,
-            &state.default_save_dir,
-            &config.save_dir,
-            category,
-        )?
-    };
-    let file_name = dest
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| fallback_name.into());
-
-    Ok(FileOpenResult {
-        file_path: dest.to_string_lossy().to_string(),
-        file_name,
-        base64_data: String::new(),
-    })
+    import_file_to_library_inner(&state, source_path, category, context)
 }
 
-/// 将视频复制到 app 数据目录，规避源路径不在 asset scope 中导致的 WebView 加载失败。
-#[command]
-pub fn prepare_video_file_for_playback(
-    state: State<'_, AppState>,
+pub(crate) fn import_file_to_library_inner(
+    state: &AppState,
     source_path: String,
+    category: AssetCategory,
+    context: &str,
 ) -> Result<FileOpenResult, String> {
-    let source = Path::new(&source_path);
-    if !source.exists() {
-        return Err("视频文件不存在".into());
-    }
-    if !source.is_file() {
-        return Err("请选择视频文件".into());
-    }
-
-    let file_name = source
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "video.mp4".into());
-    let extension = source
-        .extension()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "mp4".into());
-    let stem = source
-        .file_stem()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "video".into());
-
-    let root = app_data_root(&state)?.join("temp_videos");
-    std::fs::create_dir_all(&root).map_err(|e| format!("创建临时视频目录失败: {}", e))?;
-
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%f").to_string();
-    let nonce = TEMP_VIDEO_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dest_name = format!(
-        "{}_{}_{:04}.{}",
-        sanitize_video_temp_name(&stem),
-        timestamp,
-        nonce % 10_000,
-        sanitize_video_temp_name(&extension)
-    );
-    let dest = root.join(dest_name);
-    std::fs::copy(source, &dest).map_err(|e| format!("复制视频到临时目录失败: {}", e))?;
-    cleanup_old_temp_videos(&root);
+    let dest =
+        asset_library::copy_file_to_category(&source_path, &state.default_save_dir, category)?;
+    let file_name = required_file_name(
+        &dest,
+        context,
+        "请重新选择一个带文件名的本地文件，不要选择磁盘根目录、目录或虚拟路径。",
+    )?;
 
     Ok(FileOpenResult {
         file_path: dest.to_string_lossy().to_string(),
         file_name,
-        base64_data: String::new(),
     })
-}
-
-/// 删除某个为 WebView 播放复制出来的临时视频文件。
-#[command]
-pub fn cleanup_prepared_video_file(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<TempCleanupResult, String> {
-    cleanup_path_inside_root(
-        &temp_videos_root(&state)?,
-        Path::new(&path),
-        TempPathKind::File,
-    )
 }
 
 /// 删除某个 ffmpeg 视频抽帧批次目录。
@@ -213,11 +136,9 @@ pub fn cleanup_video_frame_batch_dir(
     state: State<'_, AppState>,
     output_dir: String,
 ) -> Result<TempCleanupResult, String> {
-    cleanup_path_inside_root(
-        &temp_video_frames_root(&state)?,
-        Path::new(&output_dir),
-        TempPathKind::Dir,
-    )
+    let _lock = DataLock::exclusive(&state.locks_dir, LockDomain::Assets)
+        .map_err(|error| error.to_string())?;
+    cleanup_dir_inside_root(&temp_video_frames_root(&state), Path::new(&output_dir))
 }
 
 /// 清理视频序列帧页面上次运行遗留的临时文件。
@@ -225,39 +146,16 @@ pub fn cleanup_video_frame_batch_dir(
 pub fn cleanup_video_sprite_temp_files(
     state: State<'_, AppState>,
 ) -> Result<TempCleanupResult, String> {
-    let mut summary = TempCleanupResult::default();
-    summary.add(cleanup_files_in_root(&temp_videos_root(&state)?)?);
-    summary.add(cleanup_dirs_in_root(&temp_video_frames_root(&state)?)?);
-    Ok(summary)
+    let _lock = DataLock::exclusive(&state.locks_dir, LockDomain::Assets)
+        .map_err(|error| error.to_string())?;
+    cleanup_dirs_in_root(&temp_video_frames_root(&state))
 }
 
-fn app_data_root(state: &AppState) -> Result<PathBuf, String> {
-    state
-        .workbench_records_path
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "应用数据目录不可用".into())
+fn temp_video_frames_root(state: &AppState) -> PathBuf {
+    state.app_data_dir.join("temp_video_frames")
 }
 
-fn temp_videos_root(state: &AppState) -> Result<PathBuf, String> {
-    Ok(app_data_root(state)?.join("temp_videos"))
-}
-
-fn temp_video_frames_root(state: &AppState) -> Result<PathBuf, String> {
-    Ok(app_data_root(state)?.join("temp_video_frames"))
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TempPathKind {
-    File,
-    Dir,
-}
-
-fn cleanup_path_inside_root(
-    root: &Path,
-    path: &Path,
-    kind: TempPathKind,
-) -> Result<TempCleanupResult, String> {
+fn cleanup_dir_inside_root(root: &Path, path: &Path) -> Result<TempCleanupResult, String> {
     if path.as_os_str().is_empty() || !path.exists() {
         return Ok(TempCleanupResult::default());
     }
@@ -274,114 +172,31 @@ fn cleanup_path_inside_root(
     }
 
     let metadata = std::fs::metadata(&target).map_err(|e| format!("读取临时路径失败: {}", e))?;
-    match kind {
-        TempPathKind::File => {
-            if !metadata.is_file() {
-                return Err("临时路径不是文件".into());
-            }
-            std::fs::remove_file(&target).map_err(|e| format!("删除临时视频失败: {}", e))?;
-            Ok(TempCleanupResult {
-                removed_files: 1,
-                removed_dirs: 0,
-            })
-        }
-        TempPathKind::Dir => {
-            if !metadata.is_dir() {
-                return Err("临时路径不是目录".into());
-            }
-            std::fs::remove_dir_all(&target).map_err(|e| format!("删除临时抽帧目录失败: {}", e))?;
-            Ok(TempCleanupResult {
-                removed_files: 0,
-                removed_dirs: 1,
-            })
-        }
+    if !metadata.is_dir() {
+        return Err("临时路径不是目录".into());
     }
+    std::fs::remove_dir_all(&target).map_err(|e| format!("删除临时抽帧目录失败: {}", e))?;
+    Ok(TempCleanupResult { removed_dirs: 1 })
 }
 
-fn cleanup_files_in_root(root: &Path) -> Result<TempCleanupResult, String> {
-    if !root.exists() {
-        return Ok(TempCleanupResult::default());
-    }
-    let mut summary = TempCleanupResult::default();
-    for entry in std::fs::read_dir(root).map_err(|e| format!("读取临时视频目录失败: {}", e))?
-    {
-        let path = entry
-            .map_err(|e| format!("读取临时视频目录项失败: {}", e))?
-            .path();
-        if path.is_file() {
-            std::fs::remove_file(&path).map_err(|e| format!("删除临时视频失败: {}", e))?;
-            summary.removed_files += 1;
-        }
-    }
-    Ok(summary)
-}
-
-fn cleanup_dirs_in_root(root: &Path) -> Result<TempCleanupResult, String> {
+pub(crate) fn cleanup_dirs_in_root(root: &Path) -> Result<TempCleanupResult, String> {
     if !root.exists() {
         return Ok(TempCleanupResult::default());
     }
     let mut summary = TempCleanupResult::default();
     for entry in std::fs::read_dir(root).map_err(|e| format!("读取临时抽帧目录失败: {}", e))?
     {
-        let path = entry
-            .map_err(|e| format!("读取临时抽帧目录项失败: {}", e))?
-            .path();
-        if path.is_dir() {
+        let entry = entry.map_err(|e| format!("读取临时抽帧目录项失败: {}", e))?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("读取临时抽帧目录项元数据失败: {}", e))?;
+        if metadata.is_dir() {
             std::fs::remove_dir_all(&path).map_err(|e| format!("删除临时抽帧目录失败: {}", e))?;
             summary.removed_dirs += 1;
         }
     }
     Ok(summary)
-}
-
-fn sanitize_video_temp_name(value: &str) -> String {
-    let sanitized: String = value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
-            {
-                '_'
-            } else {
-                ch
-            }
-        })
-        .collect();
-    let sanitized = sanitized
-        .trim_matches(|ch: char| ch == '.' || ch == '_' || ch == '-' || ch.is_whitespace())
-        .to_string();
-    if sanitized.is_empty() {
-        "video".into()
-    } else {
-        sanitized
-    }
-}
-
-fn cleanup_old_temp_videos(root: &Path) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            if !metadata.is_file() {
-                return None;
-            }
-            let modified = metadata.modified().ok()?;
-            Some((modified, entry.path()))
-        })
-        .collect();
-    files.sort_by_key(|(modified, _)| *modified);
-
-    const MAX_TEMP_VIDEOS: usize = 8;
-    if files.len() <= MAX_TEMP_VIDEOS {
-        return;
-    }
-    let remove_count = files.len() - MAX_TEMP_VIDEOS;
-    for (_, path) in files.into_iter().take(remove_count) {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 /// 在系统文件管理器中打开目录
@@ -414,58 +229,43 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_path_inside_root_deletes_child_file() {
-        let root = unique_temp_root("cleanup_file_root");
-        std::fs::create_dir_all(&root).unwrap();
-        let file = root.join("video.webm");
-        std::fs::write(&file, b"temp").unwrap();
-
-        let result = cleanup_path_inside_root(&root, &file, TempPathKind::File).unwrap();
-
-        assert_eq!(result.removed_files, 1);
-        assert_eq!(result.removed_dirs, 0);
-        assert!(!file.exists());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn test_cleanup_path_inside_root_deletes_child_dir() {
+    fn test_cleanup_dir_inside_root_deletes_child_dir() {
         let root = unique_temp_root("cleanup_dir_root");
         let dir = root.join("video_frames_1");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("frame_0000.png"), b"temp").unwrap();
 
-        let result = cleanup_path_inside_root(&root, &dir, TempPathKind::Dir).unwrap();
+        let result = cleanup_dir_inside_root(&root, &dir).unwrap();
 
-        assert_eq!(result.removed_files, 0);
         assert_eq!(result.removed_dirs, 1);
         assert!(!dir.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn test_cleanup_path_inside_root_rejects_outside_path() {
+    fn test_cleanup_dir_inside_root_rejects_outside_dir() {
         let root = unique_temp_root("cleanup_reject_root");
         let outside_root = unique_temp_root("cleanup_reject_outside");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&outside_root).unwrap();
-        let file = outside_root.join("video.webm");
-        std::fs::write(&file, b"temp").unwrap();
+        let dir = outside_root.join("video_frames_1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("frame_0000.png"), b"temp").unwrap();
 
-        let err = cleanup_path_inside_root(&root, &file, TempPathKind::File).unwrap_err();
+        let err = cleanup_dir_inside_root(&root, &dir).unwrap_err();
 
         assert!(err.contains("拒绝清理非应用临时路径"));
-        assert!(file.exists());
+        assert!(dir.exists());
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(outside_root);
     }
 
     #[test]
-    fn test_cleanup_path_inside_root_rejects_root_itself() {
+    fn test_cleanup_dir_inside_root_rejects_root_itself() {
         let root = unique_temp_root("cleanup_reject_self");
         std::fs::create_dir_all(&root).unwrap();
 
-        let err = cleanup_path_inside_root(&root, &root, TempPathKind::Dir).unwrap_err();
+        let err = cleanup_dir_inside_root(&root, &root).unwrap_err();
 
         assert!(err.contains("拒绝清理非应用临时路径"));
         assert!(root.exists());

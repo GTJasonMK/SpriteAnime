@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # 一键测试脚本 — Rust单元测试 + TS类型检查 + 前端构建
-# 用法: ./scripts/test.sh [--unit|--type|--build|--all]
+# 用法: ./scripts/test.sh [--unit|--type|--build|--lint|--all]
 # ============================================================
 set -euo pipefail
 
@@ -21,12 +21,11 @@ record() {
     esac
 }
 
-cleanup() {
-    rm -f "$PROJECT_ROOT/.test-lock"
-}
-trap cleanup EXIT INT TERM
-
 MODE="${1:---all}"
+if [ "$#" -gt 1 ]; then
+    error "用法: ./scripts/test.sh [--unit|--type|--build|--lint|--all]"
+    exit 1
+fi
 
 banner "SpriteAnimte - 测试套件"
 
@@ -39,12 +38,7 @@ run_rust_tests() {
     step "Rust 单元测试"
     cd "$PROJECT_ROOT/src-tauri"
 
-    # 编写临时测试（如果还不存在测试模块）
-    if ! grep -q "#\[cfg(test)\]" src/image_processor.rs 2>/dev/null; then
-        info "添加内联单元测试到 image_processor.rs..."
-    fi
-
-    if cargo test --no-fail-fast 2>&1 | tee "$PROJECT_ROOT/logs/cargo-test.log"; then
+    if timeout 60s cargo test --no-fail-fast 2>&1 | tee "$PROJECT_ROOT/logs/cargo-test.log"; then
         record "Rust 单元测试" PASS
         # 统计通过数
         local passed; passed=$(grep -c "ok" "$PROJECT_ROOT/logs/cargo-test.log" 2>/dev/null || echo "?")
@@ -61,7 +55,7 @@ run_type_check() {
     step "TypeScript 类型检查"
     cd "$PROJECT_ROOT"
 
-    if npx tsc --noEmit 2>&1 | tee "$PROJECT_ROOT/logs/tsc-check.log"; then
+    if npm run typecheck 2>&1 | tee "$PROJECT_ROOT/logs/tsc-check.log"; then
         record "TS 类型检查" PASS
     else
         local err_count; err_count=$(grep -c "error TS" "$PROJECT_ROOT/logs/tsc-check.log" 2>/dev/null || echo "?")
@@ -75,7 +69,7 @@ run_type_check() {
 run_build_check() {
     step "前端构建验证"
 
-    if run_vite_build 0 | tee "$PROJECT_ROOT/logs/vite-build.log"; then
+    if run_frontend_build 0 | tee "$PROJECT_ROOT/logs/vite-build.log"; then
         record "前端构建" PASS
     else
         record "前端构建" FAIL "详见 logs/vite-build.log"
@@ -103,7 +97,7 @@ run_clippy() {
     cd "$PROJECT_ROOT/src-tauri"
 
     if command -v cargo-clippy &>/dev/null; then
-        if cargo clippy -- -D warnings 2>&1 | tee "$PROJECT_ROOT/logs/clippy.log"; then
+        if cargo clippy --all-targets --all-features -- -D warnings 2>&1 | tee "$PROJECT_ROOT/logs/clippy.log"; then
             record "Clippy 静态分析" PASS
         else
             local warn_count; warn_count=$(grep -c "warning:" "$PROJECT_ROOT/logs/clippy.log" 2>/dev/null || echo "?")
@@ -131,12 +125,17 @@ case $MODE in
     --lint)
         run_clippy
         ;;
-    --all|*)
+    --all)
         run_rust_tests
         run_type_check
         run_build_check
         run_release_check
         run_clippy
+        ;;
+    *)
+        error "未知参数: $MODE"
+        error "用法: ./scripts/test.sh [--unit|--type|--build|--lint|--all]"
+        exit 1
         ;;
 esac
 

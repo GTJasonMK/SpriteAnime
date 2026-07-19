@@ -7,7 +7,7 @@
 - [ ] `npm run typecheck`
 - [ ] `npm run build`
 - [ ] `npm run test:matting`
-- [ ] `npm run test:bounds`
+- [ ] `npm run check:cli`
 - [ ] `npm run test:workflow`
 - [ ] `npm run test:rust`
 

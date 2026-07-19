@@ -38,7 +38,6 @@ export function preparePreviewCanvas(options: {
     `${Math.max(1, options.aspectWidth ?? canvas.width)} / ${Math.max(1, options.aspectHeight ?? canvas.height)}`;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
   placeholder.style.display = "none";
   sizeLabel.textContent = options.sizeText;
   return ctx;
@@ -48,8 +47,6 @@ export function clearPreviewCanvas(target: PreviewCanvasTarget, message: string)
   target.canvas.width = 1;
   target.canvas.height = 1;
   target.canvas.style.aspectRatio = "";
-  const ctx = target.canvas.getContext("2d");
-  ctx?.clearRect(0, 0, 1, 1);
   target.canvas.closest(".preview-area")?.classList.remove("has-image");
   target.placeholder.textContent = message;
   target.placeholder.style.display = "";

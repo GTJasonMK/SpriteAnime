@@ -14,6 +14,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 PID_FILE="$PROJECT_ROOT/.run-pids"
 LOCK_FILE="$PROJECT_ROOT/.run-lock"
 CLEANUP_DONE=false
+OWNS_LOCK=false
 
 # ============================================================
 # 资源回收
@@ -22,6 +23,10 @@ cleanup() {
     local exit_code=$?
     if [ "$CLEANUP_DONE" = true ]; then return; fi
     CLEANUP_DONE=true
+
+    if [ "$OWNS_LOCK" != true ]; then
+        exit "$exit_code"
+    fi
 
     echo ""
     warn "正在回收所有资源..."
@@ -80,6 +85,7 @@ check_duplicate() {
         rm -f "$LOCK_FILE"
     fi
     echo "$$" > "$LOCK_FILE"
+    OWNS_LOCK=true
 }
 
 # ============================================================
@@ -100,6 +106,18 @@ check_deps() {
 # 主流程
 # ============================================================
 MODE="${1:---dev}"
+if [ "$#" -gt 1 ]; then
+    error "用法: ./scripts/run.sh [--dev|--debug|--release]"
+    exit 1
+fi
+case "$MODE" in
+    --dev|--debug|--release) ;;
+    *)
+        error "未知参数: $MODE"
+        error "用法: ./scripts/run.sh [--dev|--debug|--release]"
+        exit 1
+        ;;
+esac
 
 banner "SpriteAnimte - 启动中..."
 
@@ -115,7 +133,8 @@ case "$MODE" in
         info "  → Rust 修改：cargo 自动重编译并重启应用"
         echo ""
 
-        npx tauri dev &
+        node "$PROJECT_ROOT/scripts/prepare-cli-sidecar.mjs"
+        npx tauri dev -c src-tauri/tauri.sidecar.conf.json &
         TAURI_PID=$!
         echo "$TAURI_PID" > "$PID_FILE"
         info "Tauri dev 已启动 PID=$TAURI_PID"
@@ -124,7 +143,7 @@ case "$MODE" in
     # ---- 发布模式：构建前端 + release 二进制 ----
     --release)
         info "构建前端..."
-        run_vite_build 3
+        run_frontend_build 3
 
         info "编译 Rust (release)..."
         run_cargo_build release 3
@@ -139,7 +158,7 @@ case "$MODE" in
     # ---- debug 模式：构建前端 + debug 二进制 ----
     --debug)
         info "构建前端..."
-        run_vite_build 3
+        run_frontend_build 3
 
         info "编译 Rust (debug)..."
         run_cargo_build debug 3
@@ -151,11 +170,6 @@ case "$MODE" in
         info "应用已启动 PID=$TAURI_PID"
         ;;
 
-    *)
-        error "未知参数: $MODE"
-        error "用法: ./scripts/run.sh [--dev|--debug|--release]"
-        exit 1
-        ;;
 esac
 
 echo -e "${GREEN}  SpriteAnimte 运行中，按 Ctrl+C 退出${NC}"

@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const MAX_WORKBENCH_RECORDS: usize = 500;
@@ -8,21 +7,13 @@ const MAX_WORKBENCH_RECORDS: usize = 500;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchRecord {
-    #[serde(default)]
     pub id: String,
-    #[serde(default)]
     pub path: String,
-    #[serde(default)]
     pub label: String,
-    #[serde(default)]
     pub prompt: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default)]
     pub duration_seconds: Option<f64>,
-    #[serde(default)]
     pub created_at: String,
-    #[serde(default)]
     pub updated_at: String,
 }
 
@@ -35,51 +26,58 @@ impl WorkbenchStore {
         Self { records_file }
     }
 
-    pub fn read_all(&self) -> Vec<WorkbenchRecord> {
-        let Ok(content) = std::fs::read_to_string(&self.records_file) else {
-            return Vec::new();
+    pub fn read_all(&self) -> Result<Vec<WorkbenchRecord>, String> {
+        let content = match std::fs::read_to_string(&self.records_file) {
+            Ok(content) => content,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => {
+                return Err(build_read_error(
+                    &self.records_file,
+                    &format!("读取失败：{err}"),
+                ))
+            }
         };
         let mut records =
-            serde_json::from_str::<Vec<WorkbenchRecord>>(&content).unwrap_or_default();
-        normalize_records(&mut records);
-        records
+            serde_json::from_str::<Vec<WorkbenchRecord>>(&content).map_err(|err| {
+                build_read_error(&self.records_file, &format!("JSON 解析失败：{err}"))
+            })?;
+        normalize_records(&mut records)
+            .map_err(|err| build_read_error(&self.records_file, &err))?;
+        Ok(records)
     }
 
-    pub fn read_recent(&self, limit: usize) -> Vec<WorkbenchRecord> {
-        let records = self.read_all();
-        if limit == 0 || records.len() <= limit {
-            return records;
+    pub fn read_recent(&self, limit: usize) -> Result<Vec<WorkbenchRecord>, String> {
+        if limit == 0 {
+            return Err("工作台记录读取数量必须大于 0".into());
         }
-        records[records.len() - limit..].to_vec()
+        let records = self.read_all()?;
+        if records.len() <= limit {
+            return Ok(records);
+        }
+        Ok(records[records.len() - limit..].to_vec())
     }
 
     pub fn upsert_many(
         &self,
         records: Vec<WorkbenchRecord>,
     ) -> Result<Vec<WorkbenchRecord>, String> {
-        let mut existing = self.read_all();
-        let now = current_time_string();
-
-        for mut record in records {
+        let mut existing = self.read_all()?;
+        for (index, mut record) in records.into_iter().enumerate() {
             record.path = record.path.trim().to_string();
             if record.path.is_empty() {
-                continue;
+                return Err(format!(
+                    "待写入工作台记录第{}条缺少图片路径。解决方法：请重新添加带完整路径的本地图片。",
+                    index + 1
+                ));
             }
-            normalize_record(&mut record, &now);
+            normalize_record(&mut record)
+                .map_err(|err| format!("待写入工作台记录第{}条无效：{err}", index + 1))?;
 
             if let Some(index) = existing
                 .iter()
                 .position(|item| item.id == record.id || item.path == record.path)
             {
-                let created_at = if existing[index].created_at.is_empty() {
-                    record.created_at.clone()
-                } else {
-                    existing[index].created_at.clone()
-                };
-                if record.duration_seconds.is_none() {
-                    record.duration_seconds = existing[index].duration_seconds;
-                }
-                record.created_at = created_at;
+                record.created_at = existing[index].created_at.clone();
                 existing[index] = record;
             } else {
                 existing.push(record);
@@ -96,7 +94,7 @@ impl WorkbenchStore {
         if id.is_empty() {
             return Err("记录ID为空".into());
         }
-        let mut records = self.read_all();
+        let mut records = self.read_all()?;
         let before = records.len();
         records.retain(|item| item.id != id);
         if records.len() == before {
@@ -120,16 +118,23 @@ impl WorkbenchStore {
     }
 }
 
-fn normalize_records(records: &mut Vec<WorkbenchRecord>) {
-    let now = current_time_string();
-    records.retain_mut(|record| {
+fn build_read_error(path: &Path, reason: &str) -> String {
+    format!(
+        "读取工作台记录失败：{}。原因：{}。解决方法：请关闭应用，备份并修复该 JSON 文件；如果不需要保留旧工作台记录，请手动删除该文件后重启应用。",
+        path.display(),
+        reason
+    )
+}
+
+fn normalize_records(records: &mut [WorkbenchRecord]) -> Result<(), String> {
+    for (index, record) in records.iter_mut().enumerate() {
         record.path = record.path.trim().to_string();
         if record.path.is_empty() {
-            return false;
+            return Err(format!("第{}条记录缺少图片路径", index + 1));
         }
-        normalize_record(record, &now);
-        true
-    });
+        normalize_record(record).map_err(|err| format!("第{}条记录无效：{err}", index + 1))?;
+    }
+    Ok(())
 }
 
 fn trim_old_records(records: &mut Vec<WorkbenchRecord>) {
@@ -139,122 +144,47 @@ fn trim_old_records(records: &mut Vec<WorkbenchRecord>) {
     }
 }
 
-fn normalize_record(record: &mut WorkbenchRecord, now: &str) {
-    if record.id.trim().is_empty() {
-        record.id = stable_record_id(&record.path);
+fn normalize_record(record: &mut WorkbenchRecord) -> Result<(), String> {
+    record.id = record.id.trim().to_string();
+    if record.id.is_empty() {
+        return Err("工作台记录 ID 为空".into());
     }
-    if record.label.trim().is_empty() {
-        record.label = default_label_for_path(&record.path);
-    } else {
-        record.label = record.label.trim().to_string();
-    }
+    record.label = required_label_for_record(&record.label, &record.path)?;
     record.prompt = record.prompt.trim().to_string();
-    record.model = record.model.trim().to_string();
-    record.duration_seconds = record
-        .duration_seconds
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| (value * 100.0).round() / 100.0);
-    if record.created_at.trim().is_empty() {
-        record.created_at = now.to_string();
+    record.model = required_model_for_record(&record.model, &record.path)?;
+    if let Some(value) = record.duration_seconds {
+        if !value.is_finite() || value < 0.0 {
+            return Err("工作台记录耗时无效".into());
+        }
+        record.duration_seconds = Some((value * 100.0).round() / 100.0);
     }
-    if record.updated_at.trim().is_empty() {
-        record.updated_at = now.to_string();
+    record.created_at = record.created_at.trim().to_string();
+    record.updated_at = record.updated_at.trim().to_string();
+    if record.created_at.is_empty() || record.updated_at.is_empty() {
+        return Err("工作台记录创建或更新时间为空".into());
     }
+    Ok(())
 }
 
-fn stable_record_id(path: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    format!("img-{:016x}", hasher.finish())
+fn required_label_for_record(label: &str, path: &str) -> Result<String, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err(format!(
+            "工作台记录缺少标签：{path}。解决方法：请重新添加该图片，或修复工作台记录 JSON 中的 label。"
+        ));
+    }
+    Ok(label.to_string())
 }
 
-fn default_label_for_path(path: &str) -> String {
-    Path::new(path)
-        .file_stem()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "未命名图片".into())
-}
-
-fn current_time_string() -> String {
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+fn required_model_for_record(model: &str, path: &str) -> Result<String, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(format!(
+            "工作台记录缺少模型或来源信息：{path}。解决方法：请重新添加或重新生成该图片，或修复工作台记录 JSON 中的 model。"
+        ));
+    }
+    Ok(model.to_string())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_records_file(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "sprite-anime-{name}-{}.json",
-            chrono::Local::now()
-                .timestamp_nanos_opt()
-                .unwrap_or_default()
-        ))
-    }
-
-    #[test]
-    fn delete_rejects_empty_id_without_removing_records() {
-        let path = temp_records_file("empty-delete");
-        let store = WorkbenchStore::new(path.clone());
-        let first_image = temp_records_file("one.png").to_string_lossy().to_string();
-        let second_image = temp_records_file("two.png").to_string_lossy().to_string();
-        let records = vec![
-            WorkbenchRecord {
-                id: String::new(),
-                path: first_image,
-                label: String::new(),
-                prompt: String::new(),
-                model: String::new(),
-                duration_seconds: None,
-                created_at: String::new(),
-                updated_at: String::new(),
-            },
-            WorkbenchRecord {
-                id: String::new(),
-                path: second_image,
-                label: String::new(),
-                prompt: String::new(),
-                model: String::new(),
-                duration_seconds: None,
-                created_at: String::new(),
-                updated_at: String::new(),
-            },
-        ];
-        store.save_all(&records).unwrap();
-
-        let result = store.delete("");
-        let remaining = store.read_all();
-
-        let _ = std::fs::remove_file(path);
-        assert!(result.is_err());
-        assert_eq!(remaining.len(), 2);
-        assert!(remaining.iter().all(|record| !record.id.is_empty()));
-    }
-
-    #[test]
-    fn delete_can_remove_normalized_legacy_empty_id_record() {
-        let path = temp_records_file("legacy-delete");
-        let store = WorkbenchStore::new(path.clone());
-        let image_path = temp_records_file("legacy.png")
-            .to_string_lossy()
-            .to_string();
-        let records = vec![WorkbenchRecord {
-            id: String::new(),
-            path: image_path,
-            label: String::new(),
-            prompt: String::new(),
-            model: String::new(),
-            duration_seconds: None,
-            created_at: String::new(),
-            updated_at: String::new(),
-        }];
-        store.save_all(&records).unwrap();
-        let id = store.read_all()[0].id.clone();
-
-        let remaining = store.delete(&id).unwrap();
-
-        let _ = std::fs::remove_file(path);
-        assert!(remaining.is_empty());
-    }
-}
+mod tests;

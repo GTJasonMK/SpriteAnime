@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { alphaAt, makePixels, setPixel } from "./pixel-test-helpers.mjs";
 import {
   cleanupTempDir,
   compileEsModule,
@@ -14,7 +13,7 @@ const outDir = resetTempDir("spriteanime-matting-tests");
 const compiledPath = compileEsModule(
   root,
   outDir,
-  "src/pages/generator-matting.ts",
+  "src/features/image/matting.ts",
   "generator-matting.js"
 );
 const matting = await import(pathToFileURL(compiledPath).href);
@@ -45,108 +44,10 @@ function testContainMappingVerticalLetterbox() {
   assert.equal(matting.mapClientPointToCanvasPixel(110, 80, bounds, 100, 50), null);
 }
 
-function testEraseConnectedWhiteResidue() {
-  const width = 8;
-  const height = 6;
-  const data = makePixels(width, height);
-  setPixel(data, width, 3, 2, [255, 255, 255, 255]);
-  setPixel(data, width, 4, 2, [248, 248, 248, 255]);
-  setPixel(data, width, 3, 3, [250, 250, 250, 255]);
-  setPixel(data, width, 4, 3, [244, 244, 244, 255]);
-  setPixel(data, width, 5, 2, [30, 70, 220, 255]);
-
-  const result = matting.eraseConnectedRegion({
-    data,
-    width,
-    height,
-    startX: 3,
-    startY: 2,
-    tolerance: 28,
-    radius: 0,
-  });
-
-  assert.equal(result.reason, "erased");
-  assert.equal(result.erasedPixels, 4);
-  assert.equal(alphaAt(data, width, 3, 2), 0);
-  assert.equal(alphaAt(data, width, 4, 3), 0);
-  assert.equal(alphaAt(data, width, 5, 2), 255);
-}
-
-function testTransparentClickFindsNearbyResidueSeed() {
-  const width = 8;
-  const height = 6;
-  const data = makePixels(width, height);
-  setPixel(data, width, 4, 2, [255, 255, 255, 255]);
-  setPixel(data, width, 5, 2, [255, 255, 255, 255]);
-
-  const result = matting.eraseConnectedRegion({
-    data,
-    width,
-    height,
-    startX: 3,
-    startY: 2,
-    tolerance: 20,
-    radius: 1,
-  });
-
-  assert.equal(result.reason, "erased");
-  assert.deepEqual(result.seed, { x: 4, y: 2 });
-  assert.equal(result.erasedPixels, 2);
-  assert.equal(alphaAt(data, width, 4, 2), 0);
-  assert.equal(alphaAt(data, width, 5, 2), 0);
-}
-
-function testDiagonalResidueIsOneRegion() {
-  const width = 5;
-  const height = 5;
-  const data = makePixels(width, height);
-  setPixel(data, width, 1, 1, [255, 255, 255, 255]);
-  setPixel(data, width, 2, 2, [252, 252, 252, 255]);
-  setPixel(data, width, 3, 3, [249, 249, 249, 255]);
-
-  const result = matting.eraseConnectedRegion({
-    data,
-    width,
-    height,
-    startX: 1,
-    startY: 1,
-    tolerance: 10,
-    radius: 0,
-  });
-
-  assert.equal(result.erasedPixels, 3);
-  assert.equal(alphaAt(data, width, 3, 3), 0);
-}
-
-function testNoSeedDoesNotMutateTransparentImage() {
-  const width = 4;
-  const height = 4;
-  const data = makePixels(width, height);
-  const before = Array.from(data);
-
-  const result = matting.eraseConnectedRegion({
-    data,
-    width,
-    height,
-    startX: 1,
-    startY: 1,
-    tolerance: 28,
-    radius: 1,
-  });
-
-  assert.equal(result.reason, "no_seed");
-  assert.equal(result.erasedPixels, 0);
-  assert.deepEqual(Array.from(data), before);
-}
-
 runTests([
   testContainMappingHorizontalLetterbox,
   testContainMappingVerticalLetterbox,
-  testEraseConnectedWhiteResidue,
-  testTransparentClickFindsNearbyResidueSeed,
-  testDiagonalResidueIsOneRegion,
-  testNoSeedDoesNotMutateTransparentImage,
 ]);
 
 cleanupTempDir(outDir);
-console.log("Matting algorithm tests passed.");
+console.log("Matting coordinate tests passed.");

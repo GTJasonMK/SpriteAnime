@@ -1,0 +1,413 @@
+/* ========================================
+   工作台布局（图片生成页）
+   ======================================== */
+
+/* 覆盖生成页的默认页面样式 */
+#page-generator.task-surface.active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* === 顶部工具栏 === */
+.workbench-toolbar {
+  display: flex;
+  align-items: center;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+/* === 左侧参数边栏 === */
+.workbench-sidebar {
+  min-width: 280px;
+  border-right: 1px solid var(--border-default);
+  overflow-y: auto;
+  flex-shrink: 0;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.sidebar-params {
+  display: flex;
+  flex-direction: column;
+}
+
+.workbench-sidebar > .sidebar-params[hidden] {
+  display: none !important;
+}
+
+.sidebar-params .form-group {
+  gap: 4px;
+}
+
+.inspector-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  margin: -12px -12px 12px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.inspector-panel-heading .btn-sm {
+  min-width: 92px;
+  min-height: 28px;
+  padding: 3px 9px;
+  justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.workbench-sidebar .sidebar-params {
+  gap: 10px;
+}
+
+.inspector-panel {
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  background: var(--bg-card-strong);
+}
+
+.prompt-panel textarea {
+  min-height: 108px;
+}
+
+.compact-field {
+  margin-top: 10px;
+}
+
+.compact-field > span,
+.generation-parameter-grid .form-group > span {
+  color: var(--text-placeholder);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.generation-parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 8px;
+}
+
+.generation-constraints-panel .inspector-panel-heading .auto-trim-toggle {
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.generation-constraint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.generation-constraint-grid input,
+.generation-constraint-grid select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.generation-parameter-grid select {
+  min-width: 0;
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.matting-panel .form-group {
+  margin-bottom: 12px;
+}
+
+.sidebar-params .form-group label {
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sidebar-params textarea {
+  width: 100%;
+  max-height: 220px;
+  font-size: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.sidebar-params textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.sidebar-params input[type="text"] {
+  width: 100%;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.sidebar-params input[type="text"]:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.reference-image-picker {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.reference-image-thumb {
+  width: 72px;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.10) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.10) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.10) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.10) 75%);
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  background-size: 12px 12px;
+}
+
+.reference-image-thumb img {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.reference-image-thumb span {
+  color: var(--text-placeholder);
+  font-size: 12px;
+}
+
+.reference-image-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.reference-image-info input[readonly] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reference-image-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.reference-image-actions .btn-sm {
+  justify-content: center;
+  min-height: 32px;
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
+.sidebar-params select {
+  width: 100%;
+  padding: 10px 32px 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.72)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.sidebar-params select:hover {
+  border-color: var(--primary-border);
+  background-color: var(--bg-hover);
+}
+
+.sidebar-params select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.toolbar-status {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  max-width: min(46vw, 680px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-profile-switch {
+  min-width: 190px;
+  max-width: 240px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.toolbar-profile-switch select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-family);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.72)' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+
+.toolbar-profile-switch select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+.top-profile-switch {
+  min-width: 220px;
+  max-width: 280px;
+}
+
+/* 设置按钮 */
+.btn-settings {
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.92;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.2s, transform 0.15s;
+}
+
+.btn-settings:hover {
+  opacity: 1;
+  background: var(--bg-selected);
+  border-color: var(--primary-border);
+  box-shadow: 0 0 0 3px var(--primary-light), var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.btn-settings:active {
+  transform: translateY(0);
+}
+
+.btn-settings:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--primary-light), var(--shadow-md);
+}
+
+.btn-settings svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#page-generator .workspace-empty {
+  width: auto;
+  min-width: 280px;
+  min-height: auto;
+  margin: auto;
+  padding: 32px 40px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#page-generator .empty-icon {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 8px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-card);
+  border-radius: 14px;
+  color: var(--primary);
+  background: var(--bg-card-strong);
+  filter: none;
+  opacity: 1;
+}
+
+#page-generator .empty-icon svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 工具栏中的进度条 */
+.workbench-toolbar .progress-container {
+  flex: 1;
+  max-width: 520px;
+  margin-top: 0;
+}
+
+/* === 工作区（全宽，无侧边栏） === */
+.workbench-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 结果操作按钮 */
+.result-actions {
+  display: flex;
+  gap: 10px;
+  padding: 16px 0 0;
+  background: transparent;
+  flex-wrap: wrap;
+}

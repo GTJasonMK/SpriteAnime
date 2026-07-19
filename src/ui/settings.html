@@ -1,0 +1,189 @@
+    <!-- 设置弹窗 -->
+    <div class="modal-overlay" id="settings-modal" style="display:none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>设置</h2>
+          <button id="btn-close-modal" class="btn-close-modal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-tabs" role="tablist" aria-label="设置分类">
+            <button class="settings-tab active" data-settings-tab="profiles" type="button" role="tab" aria-selected="true">配置组</button>
+            <button class="settings-tab" data-settings-tab="image" type="button" role="tab" aria-selected="false">图片生成</button>
+            <button class="settings-tab" data-settings-tab="video" type="button" role="tab" aria-selected="false">视频生成</button>
+            <button class="settings-tab" data-settings-tab="optimizer" type="button" role="tab" aria-selected="false">提示词优化</button>
+            <button class="settings-tab" data-settings-tab="output" type="button" role="tab" aria-selected="false">输出与工具</button>
+          </div>
+
+          <section class="settings-panel active" data-settings-panel="profiles" role="tabpanel">
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">API 配置组</h3>
+              <div class="form-group">
+                <label for="api-profile-name">当前配置名称</label>
+                <input type="text" id="api-profile-name" placeholder="例如 OpenAI 主账号" autocomplete="off" />
+              </div>
+              <div class="api-profile-list" id="api-profile-list"></div>
+              <div class="api-profile-actions">
+                <button id="btn-add-api-profile" class="btn-sm" type="button">新增</button>
+                <button id="btn-duplicate-api-profile" class="btn-sm" type="button">复制</button>
+                <button id="btn-delete-api-profile" class="btn-sm btn-danger-soft" type="button">删除</button>
+              </div>
+              <div class="config-file-actions">
+                <button id="btn-import-config" class="btn-sm" type="button">导入配置</button>
+                <button id="btn-export-config" class="btn-sm" type="button">导出配置</button>
+              </div>
+              <div class="config-check-status">导入/导出会处理 API 配置组、模型、工具路径和提示词历史；导出文件会清空 API Key，密钥请通过本机设置或 CLI 环境变量管理。</div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="image" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">图片生成 API</h3>
+              <div class="form-group">
+                <label for="api-key">API Key</label>
+                <div class="input-row">
+                  <input type="password" id="api-key" placeholder="输入API密钥" autocomplete="off" />
+                  <button id="btn-toggle-key" class="btn-icon key-visibility" title="显示 API Key" aria-label="显示图片 API Key" aria-pressed="false" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="api-base">API 地址</label>
+                <input type="text" id="api-base" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="generation-api-mode">调用方式</label>
+                <select id="generation-api-mode">
+                  <option value="responses">Responses (/responses)</option>
+                  <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                  <option value="images_generations">Images Generations JSON (/images/generations)</option>
+                  <option value="images_edits_json">Images Edits JSON (/images/edits)</option>
+                  <option value="images_edits_multipart">Images Edits Multipart (/images/edits)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="model-input">图片模型</label>
+                <div class="input-row">
+                  <input type="text" id="model-input" list="model-list" placeholder="输入或选择模型" autocomplete="off" />
+                  <button id="btn-check-generation-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <datalist id="model-list"></datalist>
+                <div id="generation-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="form-group">
+                <label for="proxy-url">代理地址</label>
+                <input type="text" id="proxy-url" placeholder="留空则读取系统环境代理" autocomplete="off" />
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="video" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <div class="sidebar-section-heading">
+                <h3 class="sidebar-section-title">视频生成 API</h3>
+                <button id="btn-copy-image-api-to-video" class="btn-sm" title="覆盖视频 API Key、地址和代理" type="button">复制图片连接</button>
+              </div>
+              <div class="form-group">
+                <label for="video-api-key">视频 API Key</label>
+                <div class="input-row">
+                  <input type="password" id="video-api-key" placeholder="输入视频 API Key" autocomplete="off" />
+                  <button id="btn-toggle-video-key" class="btn-icon key-visibility" title="显示 API Key" aria-label="显示视频 API Key" aria-pressed="false" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="video-api-base">视频 API 地址</label>
+                <input type="text" id="video-api-base" placeholder="https://api.example.com/v1" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="video-model-input">视频模型</label>
+                <div class="input-row">
+                  <input type="text" id="video-model-input" placeholder="sora-2" autocomplete="off" />
+                  <button id="btn-check-video-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <div id="video-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="form-group">
+                <label for="video-api-mode">调用方式</label>
+                <select id="video-api-mode">
+                  <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                  <option value="videos">Videos JSON (/videos)</option>
+                  <option value="videos_generations">Videos Generations JSON (/videos/generations)</option>
+                  <option value="videos_edits">Videos Edits JSON (/videos/edits)</option>
+                  <option value="videos_extensions">Videos Extensions JSON (/videos/extensions)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="video-proxy-url">视频代理地址</label>
+                <input type="text" id="video-proxy-url" placeholder="可选；留空则读取系统环境代理" autocomplete="off" />
+              </div>
+              <div class="config-check-status">GGGB Gateway 的标准图片和视频端点均使用 JSON；只有 Images Edits Multipart 使用表单上传。</div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="optimizer" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <div class="sidebar-section-heading">
+                <h3 class="sidebar-section-title">提示词优化 LLM</h3>
+                <button id="btn-copy-image-api-to-optimizer" class="btn-sm" title="覆盖优化 API Key 和地址" type="button">复制图片连接</button>
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-key">优化 API Key</label>
+                <div class="input-row">
+                  <input type="password" id="prompt-optimizer-api-key" placeholder="输入优化 API Key" autocomplete="off" />
+                  <button id="btn-toggle-prompt-optimizer-key" class="btn-icon key-visibility" title="显示 API Key" aria-label="显示优化 API Key" aria-pressed="false" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-base">优化 API 地址</label>
+                <input type="text" id="prompt-optimizer-api-base" placeholder="https://api.example.com/v1" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-api-mode">调用方式</label>
+                <select id="prompt-optimizer-api-mode">
+                  <option value="chat_completions">Chat Completions (/chat/completions)</option>
+                  <option value="responses">Responses (/responses)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="prompt-optimizer-model-input">优化模型</label>
+                <div class="input-row">
+                  <input type="text" id="prompt-optimizer-model-input" list="model-list" placeholder="deepseek-v4-flash" autocomplete="off" />
+                  <button id="btn-check-prompt-optimizer-api" class="btn-sm" type="button">检测</button>
+                </div>
+                <div id="prompt-optimizer-api-check-status" class="config-check-status" aria-live="polite"></div>
+              </div>
+              <div class="config-check-status">“复制图片连接”只复制 API Key 和地址；提示词优化沿用图片生成代理。调用方式和模型仍需单独确认。</div>
+              <div class="form-group">
+                <label class="checkbox-row" for="prompt-optimizer-vision">
+                  <input type="checkbox" id="prompt-optimizer-vision" />
+                  <span>优化时理解参考图</span>
+                </label>
+                <div class="config-check-status">开启后，存在参考图时会把参考图发送给提示词优化模型。</div>
+                <div class="config-check-status">如果模型不支持图片输入，会直接报错并提示更换多模态模型或关闭此选项。</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="output" role="tabpanel" hidden>
+            <div class="sidebar-section">
+              <h3 class="sidebar-section-title">视频处理</h3>
+              <div class="form-group">
+                <label for="ffmpeg-path">FFmpeg 路径</label>
+                <input type="text" id="ffmpeg-path" placeholder="填写 ffmpeg 可执行文件路径" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label for="ffprobe-path">FFprobe 路径</label>
+                <input type="text" id="ffprobe-path" placeholder="填写 ffprobe 可执行文件路径" autocomplete="off" />
+              </div>
+              <div class="tool-actions">
+                <button id="btn-check-ffmpeg-tools" class="btn-sm" type="button">检测工具</button>
+                <button id="btn-download-ffmpeg-tools" class="btn-sm" type="button">下载并配置</button>
+              </div>
+              <div id="ffmpeg-tool-status" class="config-check-status" aria-live="polite">视频处理需要同时配置 FFmpeg 和 FFprobe；下载会安装到应用旁数据目录并自动写入路径。</div>
+            </div>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <span id="settings-status" class="config-check-status" aria-live="polite">设置修改会在保存后立即用于所有任务</span>
+          <button id="btn-save-config" class="btn-primary">保存配置</button>
+        </div>
+      </div>
+    </div>

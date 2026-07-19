@@ -1,44 +1,56 @@
-import { GeneratorPage } from "./pages/generator";
-import { getPageForTab, getPages, getTabButtons } from "./pages/navigation";
-import { SpritePage } from "./pages/sprite";
-import { VideoSpritePage } from "./pages/video-sprite";
+import { GeneratorPage } from "./features/image/image-page";
+import { SpritePage } from "./features/sprite/sprite-page";
+import { VideoSpritePage } from "./features/video/video-page";
+import { SettingsController } from "./settings/controller";
+import appShellHtml from "./ui/app-shell.html?raw";
+import generatorHtml from "./ui/generator.html?raw";
+import settingsHtml from "./ui/settings.html?raw";
+import spriteHtml from "./ui/sprite.html?raw";
+import videoSpriteHtml from "./ui/video-sprite.html?raw";
+import { TaskCoordinator } from "./workflows/task-coordinator";
+import { WorkspaceSession } from "./workspace/session";
+
+function mountApplication(): void {
+  const root = document.getElementById("app");
+  if (!root) {
+    throw new Error("应用挂载节点 #app 不存在");
+  }
+  root.innerHTML = [appShellHtml, settingsHtml].join("");
+  const host = document.getElementById("workspace-surface-host");
+  if (!host) {
+    throw new Error("工作台挂载节点 #workspace-surface-host 不存在");
+  }
+  host.innerHTML = [generatorHtml, videoSpriteHtml, spriteHtml].join("");
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
-  console.log("[main] SpriteAnimte 启动中...");
+  mountApplication();
 
-  const generator = new GeneratorPage();
+  const settings = new SettingsController();
+  await settings.init();
+  const generator = new GeneratorPage(settings);
   const videoSprite = new VideoSpritePage();
   const sprite = new SpritePage();
 
-  // 标签页切换
-  const tabButtons = getTabButtons();
-  const pages = getPages();
+  await generator.init();
+  await videoSprite.init(settings);
+  sprite.init();
+  const coordinator = new TaskCoordinator(settings, generator, videoSprite, sprite);
+  coordinator.init();
 
-  tabButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const tabName = btn.dataset.tab;
-      console.log("[main] 切换到标签页:", tabName);
-
-      // 切换激活标签
-      tabButtons.forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-
-      // 切换页面
-      pages.forEach((p) => p.classList.remove("active"));
-      const targetPage = getPageForTab(tabName);
-      if (targetPage) {
-        targetPage.classList.add("active");
-      }
-    });
-  });
-
-  // 初始化两个页面
+  const workspace = new WorkspaceSession(coordinator, generator, videoSprite, sprite);
+  coordinator.setWorkspaceResetLifecycle(
+    () => workspace.prepareForReset(),
+    () => workspace.start()
+  );
   try {
-    await generator.init();
-    videoSprite.init(generator);
-    await sprite.init(generator);
-    console.log("[main] SpriteAnimte 启动完成");
-  } catch (err) {
-    console.error("[main] 启动失败:", err);
+    const restored = await workspace.restore();
+    if (!restored) coordinator.consumePendingTask();
+  } catch (error) {
+    console.error("[workspace] 恢复失败:", error);
+    coordinator.showRecovery(error);
+    return;
   }
+  workspace.start();
+  await workspace.bindWindowClose();
 });

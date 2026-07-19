@@ -147,7 +147,6 @@ jobs:
       - name: Node algorithm tests
         run: |
           npm run test:matting
-          npm run test:bounds
           npm run test:workflow
 
       - name: Frontend build
@@ -203,7 +202,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "{ \"version\": \"${RELEASE_VERSION}\" }" > src-tauri/tauri.release.conf.json
+          cat > src-tauri/tauri.release.conf.json <<EOF
+          {
+            "version": "${RELEASE_VERSION}",
+            "bundle": {
+              "externalBin": ["binaries/sprite-anime-cli"]
+            }
+          }
+          EOF
           echo "[INFO] Release tag: ${RELEASE_TAG}"
           echo "[INFO] Release version: ${RELEASE_VERSION}"
 
@@ -260,6 +266,12 @@ jobs:
             export NO_STRIP=1
           fi
 
+          sidecar_args=(--release)
+          if [[ -n "${{ matrix.rustTarget }}" ]]; then
+            sidecar_args+=(--target "${{ matrix.rustTarget }}")
+          fi
+          node scripts/prepare-cli-sidecar.mjs "${sidecar_args[@]}"
+
           args=(-c src-tauri/tauri.release.conf.json)
           if [[ -n "${BUILD_ARGS}" ]]; then
             # BUILD_ARGS comes from this workflow matrix, not user input.
@@ -272,6 +284,21 @@ jobs:
           if [[ "${RUNNER_OS}" == "Linux" ]]; then
             bash scripts/postprocess-appimage.sh
           fi
+
+          target="${{ matrix.rustTarget }}"
+          if [[ -z "${target}" ]]; then
+            target="$(rustc --print host-tuple)"
+          fi
+          extension=""
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            extension=".exe"
+          fi
+          package_dir="src-tauri/target/release/cli-package"
+          mkdir -p "${package_dir}"
+          cp "src-tauri/binaries/sprite-anime-cli-${target}${extension}" \
+            "${package_dir}/sprite-anime-cli${extension}"
+          tar -czf "src-tauri/target/release/bundle/sprite-anime-cli-${{ matrix.artifact }}.tar.gz" \
+            -C "${package_dir}" "sprite-anime-cli${extension}"
 
       - name: Write bundle metadata
         shell: bash
@@ -383,9 +410,10 @@ jobs:
           generate_release_notes: true
           files: release-assets/*
           body: |
-            自动构建的 SpriteAnimte 桌面安装包。
+            自动构建的 SpriteAnimte 桌面安装包和独立 CLI 压缩包。
 
             下载下方 assets 中对应平台的安装包：
             - Linux: AppImage / deb / rpm
             - Windows: msi / nsis
             - macOS: dmg
+            - CLI: `sprite-anime-cli-*.tar.gz`

@@ -1,0 +1,244 @@
+/* ========================================
+   SpriteAnimte — Glass Workbench Theme
+   ======================================== */
+
+/* === CSS变量定义 === */
+
+/* === 全局重置 === */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background-attachment: fixed;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(120deg, rgba(194, 138, 85, 0.020), transparent 40%, rgba(169, 120, 98, 0.018)),
+    linear-gradient(200deg, transparent 0%, rgba(68, 63, 58, 0.10) 56%, transparent 100%);
+  opacity: 0.60;
+}
+
+/* === 表单 === */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.grid-preset-row {
+  display: flex;
+  gap: 6px;
+}
+
+.region-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.region-field input.input-sm {
+  width: 82px;
+}
+
+.region-field .input-compact {
+  width: 86px;
+  min-height: 34px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 12px;
+}
+
+.auto-trim-toggle {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.auto-trim-toggle input {
+  margin: 0;
+}
+
+/* === 输入框 === */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+textarea {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-family);
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  outline: none;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--border-focus);
+  background: rgba(224, 224, 220, 0.10);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-placeholder);
+}
+
+textarea {
+  line-height: 1.5;
+}
+
+input.input-sm {
+  width: 80px;
+  text-align: center;
+}
+
+input[readonly] {
+  background: rgba(224, 224, 220, 0.06);
+  cursor: default;
+}
+
+/* === 下拉框 === */
+select {
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+select:hover {
+  border-color: var(--primary-border);
+  background-color: var(--bg-hover);
+}
+
+/* === 按钮 === */
+button {
+  font-family: var(--font-family);
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+button.is-loading {
+  opacity: 1;
+  cursor: progress;
+  justify-content: center;
+}
+
+button.is-loading::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  animation: button-loading-spin 0.72s linear infinite;
+}
+
+@keyframes button-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.btn-primary {
+  padding: 10px 24px;
+  font-weight: 600;
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--primary-active);
+}
+
+.btn-secondary {
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.btn-secondary.mode-active:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--primary-hover), var(--accent-pink));
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 13px;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.btn-icon {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  font-size: 16px;
+}
+
+.btn-icon:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-icon-sm {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.btn-danger-soft:hover:not(:disabled) {
+  border-color: rgba(232, 198, 184, 0.36);
+}

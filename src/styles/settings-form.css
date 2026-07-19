@@ -1,0 +1,372 @@
+/* 弹窗内表单样式（复用侧边栏紧凑风格） */
+.modal-body .sidebar-section {
+  margin-bottom: 16px;
+}
+
+.modal-body .sidebar-section:last-child {
+  margin-bottom: 0;
+}
+
+.modal-body .sidebar-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.modal-body .sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.modal-body .sidebar-section-heading .sidebar-section-title {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.modal-body .sidebar-section-heading .btn-sm {
+  min-width: 112px;
+  justify-content: center;
+}
+
+.modal-body .form-group {
+  margin-bottom: 8px;
+}
+
+.modal-body .form-group:last-child {
+  margin-bottom: 0;
+}
+
+.modal-body .form-group label {
+  font-size: 12px;
+}
+
+.modal-body input[type="text"],
+.modal-body input[type="password"],
+.modal-body input[type="number"],
+.modal-body textarea,
+.modal-body select {
+  width: 100%;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.modal-body .btn-sm {
+  font-size: 12px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+}
+
+.modal-body .btn-icon {
+  font-size: 15px;
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+
+.key-visibility {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  border: 1px solid var(--border-default);
+  background: var(--bg-input);
+}
+
+.key-visibility svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.key-visibility[aria-pressed="true"] {
+  color: var(--primary);
+  border-color: var(--primary-border);
+}
+
+.modal-body .input-row {
+  gap: 4px;
+}
+
+.api-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.api-profile-item {
+  width: 100%;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-family);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.api-profile-item:hover {
+  border-color: var(--primary-border);
+  background: var(--bg-hover);
+}
+
+.api-profile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.api-profile-meta {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.api-profile-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.api-profile-actions .btn-sm,
+.config-file-actions .btn-sm {
+  justify-content: center;
+}
+
+.config-file-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.tool-actions .btn-sm {
+  justify-content: center;
+}
+
+.video-redraw-panel {
+  gap: 10px;
+}
+
+.video-redraw-profile {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.video-redraw-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.video-redraw-summary {
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.video-redraw-summary.warning {
+  border-color: rgba(227, 195, 119, 0.55);
+  background: rgba(212, 160, 72, 0.08);
+  color: #e3c377;
+}
+
+.video-redraw-summary.error {
+  border-color: rgba(241, 160, 160, 0.55);
+  background: rgba(196, 96, 88, 0.08);
+  color: #f1a0a0;
+}
+
+.video-redraw-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.video-redraw-actions button {
+  justify-content: center;
+}
+
+.video-redraw-batches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.video-redraw-batch {
+  display: grid;
+  grid-template-columns: 46px 46px 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.video-redraw-batch.failed {
+  border-color: rgba(241, 160, 160, 0.55);
+  background: rgba(196, 96, 88, 0.06);
+}
+
+.video-redraw-batch.succeeded {
+  border-color: rgba(158, 216, 165, 0.42);
+}
+
+.video-redraw-batch.running {
+  border-color: var(--primary-border);
+  background: var(--primary-light);
+}
+
+.video-redraw-batch.pending {
+  opacity: 0.72;
+}
+
+.video-redraw-batch img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.video-redraw-batch-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.video-redraw-batch-title {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.video-redraw-batch-error {
+  overflow-wrap: anywhere;
+  color: #f1a0a0;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.config-check-status {
+  min-height: 16px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-placeholder);
+  overflow-wrap: anywhere;
+}
+
+.config-check-status.ok {
+  color: #9ed8a5;
+}
+
+.config-check-status.warning {
+  color: #e3c377;
+}
+
+.config-check-status.error {
+  color: #f1a0a0;
+}
+
+.config-check-status.checking {
+  color: var(--text-secondary);
+}
+
+.boundary-sidebar-panel {
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--border-card);
+  background: rgba(224, 224, 220, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.boundary-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.boundary-sidebar-header .btn-icon-sm {
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.boundary-editor-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 8px;
+}
+
+.boundary-editor-footer .btn-sm,
+.boundary-editor-footer .btn-primary {
+  width: 100%;
+  justify-content: center;
+  padding-inline: 8px;
+}

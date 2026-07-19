@@ -8,6 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 APPIMAGE_DIR="${1:-"$PROJECT_ROOT/src-tauri/target/release/bundle/appimage"}"
+if [[ "$#" -gt 1 ]]; then
+    error "用法: ./scripts/postprocess-appimage.sh [appimage-dir]"
+    exit 1
+fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
     info "非 Linux 平台，跳过 AppImage 后处理"
@@ -15,8 +19,8 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 if [[ ! -d "$APPIMAGE_DIR" ]]; then
-    warn "未找到 AppImage 输出目录，跳过: $APPIMAGE_DIR"
-    exit 0
+    error "未找到 AppImage 输出目录: $APPIMAGE_DIR"
+    exit 1
 fi
 APPIMAGE_DIR="$(cd "$APPIMAGE_DIR" && pwd)"
 
@@ -52,21 +56,6 @@ find_appimagetool_plugin() {
         fi
     done
     return 1
-}
-
-resolve_app_binary() {
-    local appdir="$1"
-    if [[ -x "$appdir/usr/bin/sprite-anime" ]]; then
-        printf '%s\n' "sprite-anime"
-        return 0
-    fi
-
-    local binary
-    binary="$(find "$appdir/usr/bin" -maxdepth 1 -type f -perm -111 -printf '%f\n' | sort | head -n 1 || true)"
-    if [[ -z "$binary" ]]; then
-        return 1
-    fi
-    printf '%s\n' "$binary"
 }
 
 write_portable_apprun() {
@@ -163,7 +152,7 @@ APPRUN
     chmod +x "$appdir/AppRun"
 }
 
-prepare_webkit_fallback_paths() {
+prepare_webkit_runtime_paths() {
     local appdir="$1"
 
     if [[ -d "$appdir/usr/lib/x86_64-linux-gnu" ]]; then
@@ -216,8 +205,8 @@ repack_appimage() {
 extract_appimages_when_appdir_missing
 
 if [[ -z "$(find "$APPIMAGE_DIR" -maxdepth 1 -type d -name '*.AppDir' -print -quit)" ]]; then
-    warn "未找到 AppDir，跳过 AppImage 后处理: $APPIMAGE_DIR"
-    exit 0
+    error "AppImage 输出目录中既没有 AppDir，也没有可解包的 AppImage: $APPIMAGE_DIR"
+    exit 1
 fi
 
 plugin="$(find_appimagetool_plugin || true)"
@@ -226,27 +215,18 @@ if [[ -z "$plugin" ]]; then
     exit 1
 fi
 
-found="false"
 while IFS= read -r -d '' appdir; do
-    found="true"
-    app_binary="$(resolve_app_binary "$appdir")" || {
-        warn "无法解析 AppDir 主程序，跳过: $appdir"
-        continue
-    }
+    app_binary="sprite-anime"
+    if [[ ! -x "$appdir/usr/bin/$app_binary" ]]; then
+        error "AppDir 缺少主程序: $appdir/usr/bin/$app_binary"
+        exit 1
+    fi
 
     info "修正 AppImage AppRun: $appdir"
-    prepare_webkit_fallback_paths "$appdir"
+    prepare_webkit_runtime_paths "$appdir"
     write_portable_apprun "$appdir" "$app_binary"
 
-    appdir_stem="$(basename "${appdir%.AppDir}")"
-    appimage="$(find "$APPIMAGE_DIR" -maxdepth 1 -type f -name "${appdir_stem}*.AppImage" | sort | head -n 1 || true)"
-    if [[ -z "$appimage" ]]; then
-        appimage="$(find "$APPIMAGE_DIR" -maxdepth 1 -type f -name '*.AppImage' | sort | head -n 1 || true)"
-    fi
-    if [[ -z "$appimage" ]]; then
-        version="$(node -e "console.log(require(process.argv[1]).version)" "$PROJECT_ROOT/src-tauri/tauri.conf.json" 2>/dev/null || printf '0.1.0')"
-        appimage="$APPIMAGE_DIR/${app_binary}_${version}_$(uname -m).AppImage"
-    fi
+    appimage="${appdir%.AppDir}.AppImage"
 
     info "重新组装 AppImage: $(basename "$appimage")"
     repack_appimage "$appdir" "$appimage" "$plugin"
@@ -255,7 +235,3 @@ while IFS= read -r -d '' appdir; do
         rm -rf "$appdir"
     fi
 done < <(find "$APPIMAGE_DIR" -maxdepth 1 -type d -name '*.AppDir' -print0)
-
-if [[ "$found" != "true" ]]; then
-    warn "未找到 AppDir，跳过 AppImage 后处理: $APPIMAGE_DIR"
-fi

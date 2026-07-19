@@ -4,20 +4,15 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 export class FrameThumbnail {
   private container: HTMLDivElement;
   private img: HTMLImageElement;
-  private label: HTMLSpanElement;
   private orderLabel: HTMLSpanElement;
   private _index: number;
-  private _selected: boolean = false;
-  private _current: boolean = false;
-  private onClick: (index: number) => void;
 
   constructor(
     index: number,
-    source: { path?: string; base64?: string },
+    source: { path: string },
     onClick: (index: number) => void
   ) {
     this._index = index;
-    this.onClick = onClick;
 
     this.container = document.createElement("div");
     this.container.className = "frame-thumb";
@@ -25,15 +20,13 @@ export class FrameThumbnail {
 
     this.img = document.createElement("img");
     this.img.crossOrigin = "anonymous";
-    this.img.src = source.path
-      ? convertFileSrc(source.path)
-      : `data:image/png;base64,${source.base64 || ""}`;
+    this.img.src = convertFileSrc(source.path);
     this.img.alt = `#${index}`;
 
     // 序号标签（右下角）
-    this.label = document.createElement("span");
-    this.label.className = "frame-index";
-    this.label.textContent = `#${index}`;
+    const label = document.createElement("span");
+    label.className = "frame-index";
+    label.textContent = `#${index}`;
 
     // 选中顺序标签（左上角）
     this.orderLabel = document.createElement("span");
@@ -41,11 +34,11 @@ export class FrameThumbnail {
     this.orderLabel.style.display = "none";
 
     this.container.appendChild(this.img);
-    this.container.appendChild(this.label);
+    this.container.appendChild(label);
     this.container.appendChild(this.orderLabel);
 
     this.container.addEventListener("click", () => {
-      this.onClick(this._index);
+      onClick(this._index);
     });
   }
 
@@ -53,16 +46,7 @@ export class FrameThumbnail {
     return this._index;
   }
 
-  get selected(): boolean {
-    return this._selected;
-  }
-
-  get current(): boolean {
-    return this._current;
-  }
-
-  setSelected(v: boolean, order: number = -1): void {
-    this._selected = v;
+  setSelected(v: boolean, order: number): void {
     if (v) {
       this.container.classList.add("selected");
       if (order >= 0) {
@@ -76,7 +60,6 @@ export class FrameThumbnail {
   }
 
   setCurrent(v: boolean): void {
-    this._current = v;
     this.container.classList.toggle("current", v);
     this.container.setAttribute("aria-current", v ? "true" : "false");
   }

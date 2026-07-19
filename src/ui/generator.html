@@ -1,0 +1,161 @@
+    <!-- ==================== 图片生成页面（工作台布局） ==================== -->
+    <section id="page-generator" class="task-surface">
+      <!-- 顶部工具栏 -->
+      <div class="workbench-toolbar" data-task-stage="source matting">
+        <div class="progress-container" id="progress-container" style="display:none">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span class="progress-text" id="progress-text">准备中...</span>
+        </div>
+        <span class="toolbar-status" id="toolbar-status">就绪</span>
+      </div>
+
+      <!-- 主工作区 -->
+      <div class="workbench-layout">
+        <!-- 左侧边栏：提示词 + 参数 -->
+        <aside class="workbench-sidebar">
+          <div class="sidebar-params" id="generation-params" data-task-stage="source">
+            <section class="inspector-panel prompt-panel">
+              <div class="inspector-panel-heading">
+                <span>提示词</span>
+                <button id="btn-optimize-prompt" class="btn-sm" type="button">优化提示词</button>
+              </div>
+              <textarea id="prompt-input" rows="5" placeholder="描述角色、动作和风格...（Ctrl+↑/↓浏览历史）"></textarea>
+              <label class="form-group compact-field" for="neg-prompt-input">
+                <span>负面提示词</span>
+                <input type="text" id="neg-prompt-input" placeholder="需要避免的内容..." />
+              </label>
+            </section>
+            <section class="inspector-panel generation-constraints-panel">
+              <div class="inspector-panel-heading">
+                <span>序列帧约束</span>
+                <label class="auto-trim-toggle" for="image-constraints-enabled">
+                  <input id="image-constraints-enabled" type="checkbox" checked />
+                  启用
+                </label>
+              </div>
+              <div class="generation-constraint-grid">
+                <label class="form-group" for="image-constraints-rows">
+                  <span>行数</span>
+                  <input id="image-constraints-rows" type="number" min="1" max="20" value="3" />
+                </label>
+                <label class="form-group" for="image-constraints-cols">
+                  <span>列数</span>
+                  <input id="image-constraints-cols" type="number" min="1" max="20" value="4" />
+                </label>
+                <label class="form-group" for="image-constraints-background">
+                  <span>背景</span>
+                  <select id="image-constraints-background">
+                    <option value="preserve" selected>保持输入</option>
+                    <option value="solid">纯色</option>
+                    <option value="transparent">透明</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </label>
+                <label class="form-group" for="image-constraints-framing">
+                  <span>角色构图</span>
+                  <select id="image-constraints-framing">
+                    <option value="preserve">保持输入</option>
+                    <option value="full_body" selected>完整角色</option>
+                    <option value="upper_body">半身</option>
+                  </select>
+                </label>
+              </div>
+              <label class="form-group compact-field" for="image-constraints-background-description">
+                <span>背景说明</span>
+                <input id="image-constraints-background-description" type="text" placeholder="例如：纯绿色 #00ff00" disabled />
+              </label>
+            </section>
+            <section class="inspector-panel">
+              <div class="inspector-panel-heading">
+                <span>参考图</span>
+              </div>
+              <div class="reference-image-picker" id="reference-image-picker">
+                <div class="reference-image-thumb" id="reference-image-thumb">
+                  <img id="reference-image-preview" alt="参考图预览" />
+                  <span id="reference-image-empty">未选择</span>
+                </div>
+                <div class="reference-image-info">
+                  <input type="text" id="reference-image-name" value="无参考图" readonly />
+                  <div class="reference-image-actions">
+                    <button id="btn-pick-reference-image" class="btn-sm" type="button">选择图片</button>
+                    <button id="btn-clear-reference-image" class="btn-sm" type="button" disabled>移除</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-panel">
+              <div class="inspector-panel-heading">
+                <span>生成参数</span>
+              </div>
+              <div class="generation-parameter-grid">
+                <label class="form-group" for="style-select"><span>风格</span><select id="style-select"></select></label>
+                <label class="form-group" for="ratio-select"><span>宽高比</span><select id="ratio-select"></select></label>
+                <label class="form-group" for="resolution-select"><span>分辨率</span><select id="resolution-select"></select></label>
+                <label class="form-group" for="count-select">
+                  <span>数量</span>
+                  <select id="count-select">
+                    <option value="1">1 张</option>
+                    <option value="2">2 张</option>
+                    <option value="3">3 张</option>
+                    <option value="4">4 张</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+          </div>
+          <div class="sidebar-params matting-params" id="matting-params" data-task-stage="matting" hidden>
+            <section class="inspector-panel matting-panel">
+              <div class="inspector-panel-heading"><span>抠图工具</span><button id="btn-exit-matting" class="btn-sm" type="button">退出</button></div>
+              <div class="form-group"><label for="matting-tolerance-input">背景容差</label><input type="range" id="matting-tolerance-input" min="1" max="120" value="36" /><span class="range-value" id="matting-tolerance-label">36</span></div>
+              <div class="form-group"><label for="matting-feather-input">边缘柔化</label><input type="range" id="matting-feather-input" min="0" max="3" value="1" /><span class="range-value" id="matting-feather-label">1px</span></div>
+              <div class="form-group"><label for="matting-color-key-select">抠图范围</label><select id="matting-color-key-select"><option value="auto">自动</option><option value="edge">仅边缘</option><option value="global">全图同色</option></select></div>
+              <div class="form-group"><label for="matting-click-tolerance-input">点击容差</label><input type="range" id="matting-click-tolerance-input" min="1" max="120" value="28" /><span class="range-value" id="matting-click-tolerance-label">28</span></div>
+              <div class="form-group"><label for="matting-click-radius-input">点击半径</label><input type="range" id="matting-click-radius-input" min="0" max="8" value="1" /><span class="range-value" id="matting-click-radius-label">1px</span></div>
+              <div class="matting-actions matting-history-actions"><button id="btn-undo-matting" class="btn-secondary" type="button" disabled>撤销</button><button id="btn-redo-matting" class="btn-secondary" type="button" disabled>恢复</button></div>
+              <div class="matting-actions matting-main-actions"><button id="btn-run-matting" class="btn-primary" type="button">自动抠图</button><button id="btn-save-matting" class="btn-secondary" type="button" disabled>保存修改</button></div>
+            </section>
+          </div>
+        </aside>
+
+        <section class="workbench-main">
+          <div class="workspace-empty" id="workspace-empty">
+            <span class="empty-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="m5 17 4.5-4 3 2.5 2.5-2 4 3.5"/></svg>
+            </span>
+            <h3 class="empty-title">准备生成</h3>
+            <p class="empty-hint">输入提示词，然后点击上方「开始生成」按钮</p>
+            <button id="btn-add-record-empty" class="btn-secondary" type="button">添加本地图片</button>
+          </div>
+          <div class="workspace-results" id="result-card" style="display:none">
+            <div class="result-workbench">
+              <div class="selected-preview" id="selected-preview">
+                <img id="selected-image" alt="当前选中图片" />
+                <canvas id="matting-canvas"></canvas>
+                <div class="selected-meta" id="selected-meta">未选择图片</div>
+              </div>
+              <div class="gallery-panel">
+                <div class="gallery-header">
+                  <div class="gallery-title">
+                    <span>生成记录</span>
+                    <span id="gallery-count">0 张</span>
+                  </div>
+                  <div class="gallery-tools">
+                    <button id="btn-add-record" class="btn-icon-sm" type="button" title="添加本地图片">+</button>
+                    <button id="btn-delete-record" class="btn-icon-sm" type="button" title="移除选中记录" disabled>-</button>
+                    <button id="btn-clear-records" class="btn-sm btn-danger-soft" type="button" title="清空工作台记录" disabled>清空</button>
+                  </div>
+                </div>
+                <div class="image-grid" id="result-grid"></div>
+              </div>
+            </div>
+            <div class="result-actions" id="result-actions" style="display:none">
+              <button id="btn-view-image" class="btn-secondary" disabled>查看图片</button>
+              <button id="btn-open-dir" class="btn-secondary" disabled>打开目录</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </section>

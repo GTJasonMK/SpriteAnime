@@ -1,0 +1,333 @@
+    <!-- ==================== 视频转序列帧页面 ==================== -->
+    <section id="page-video-sprite" class="task-surface">
+      <div class="video-sprite-layout">
+        <aside class="video-sprite-inspector">
+          <section class="sprite-panel video-source-panel" data-task-stage="source">
+            <div class="panel-heading">
+              <span>视频来源</span>
+            </div>
+            <div class="video-source-meta">
+              <span id="video-sprite-file">未选择视频</span>
+              <span id="video-sprite-duration">时长: -</span>
+            </div>
+            <div class="video-source-mode" role="group" aria-label="视频来源方式">
+              <button class="btn-sm active" id="btn-video-source-local-mode" type="button">本地视频</button>
+              <button class="btn-sm" id="btn-video-source-ai-mode" type="button">AI 生成</button>
+            </div>
+            <div class="video-source-local-row" id="video-source-local-panel">
+              <p class="source-mode-hint">使用下方主按钮选择并导入本地视频。</p>
+            </div>
+            <div class="video-generation-panel" id="video-source-ai-panel" hidden>
+              <div class="video-generation-heading">AI 生成视频</div>
+              <label for="video-generation-prompt">提示词</label>
+              <textarea id="video-generation-prompt" rows="3" placeholder="角色动作、镜头、背景"></textarea>
+              <div class="generation-constraint-box">
+                <label class="auto-trim-toggle" for="video-constraints-enabled">
+                  <input id="video-constraints-enabled" type="checkbox" checked />
+                  序列帧约束
+                </label>
+                <div class="video-generation-grid">
+                  <label class="region-field">
+                    <span>背景</span>
+                    <select id="video-constraints-background">
+                      <option value="preserve" selected>保持输入</option>
+                      <option value="solid">纯色</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                  </label>
+                  <label class="region-field">
+                    <span>角色构图</span>
+                    <select id="video-constraints-framing">
+                      <option value="preserve">保持输入</option>
+                      <option value="full_body" selected>完整角色</option>
+                      <option value="upper_body">半身</option>
+                    </select>
+                  </label>
+                </div>
+                <input id="video-constraints-background-description" type="text" placeholder="背景说明，例如：纯绿色 #00ff00" disabled />
+                <div class="constraint-toggle-row">
+                  <label class="auto-trim-toggle" for="video-constraints-fixed-camera">
+                    <input id="video-constraints-fixed-camera" type="checkbox" checked />
+                    固定镜头
+                  </label>
+                  <label class="auto-trim-toggle" for="video-constraints-loop-action">
+                    <input id="video-constraints-loop-action" type="checkbox" checked />
+                    循环动作
+                  </label>
+                </div>
+              </div>
+              <div class="video-generation-grid">
+                <label class="region-field">
+                  <span>尺寸</span>
+                  <select id="video-generation-size">
+                    <option value="1280x720">1280×720</option>
+                    <option value="720x1280">720×1280</option>
+                    <option value="1792x1024">1792×1024</option>
+                    <option value="1024x1792">1024×1792</option>
+                  </select>
+                </label>
+                <label class="region-field">
+                  <span>秒数</span>
+                  <input id="video-generation-seconds" type="number" min="1" max="15" step="1" value="4" />
+                </label>
+              </div>
+              <label class="region-field" id="video-generation-source-id-field">
+                <span>原视频 ID</span>
+                <input id="video-generation-source-id" type="text" placeholder="编辑或扩展时填写" autocomplete="off" />
+              </label>
+              <label class="region-field" id="video-generation-direction-field">
+                <span>扩展方向</span>
+                <input id="video-generation-direction" type="text" placeholder="扩展时按服务要求填写" autocomplete="off" />
+              </label>
+              <div class="video-reference-row">
+                <input id="video-generation-reference-name" type="text" value="无参考图" readonly />
+                <button id="btn-video-reference-pick" class="btn-sm" type="button">选择参考图</button>
+                <button id="btn-video-reference-clear" class="btn-sm" type="button" disabled>移除</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="range extract">
+            <div class="panel-heading">
+              <span>抽帧</span>
+            </div>
+            <div class="video-sprite-control-grid">
+              <label class="region-field" data-task-stage="extract">
+                <span>帧数</span>
+                <input type="number" id="video-sprite-frame-count" value="12" min="2" max="64" class="input-sm" />
+              </label>
+              <label class="region-field" data-task-stage="extract">
+                <span>列数</span>
+                <input type="number" id="video-sprite-cols" value="6" min="1" max="12" class="input-sm" />
+              </label>
+              <label class="region-field" data-task-stage="range">
+                <span>开始秒</span>
+                <input type="number" id="video-sprite-start" value="0" min="0" step="0.1" class="input-sm" />
+              </label>
+              <label class="region-field" data-task-stage="range">
+                <span>结束秒</span>
+                <input type="number" id="video-sprite-end" value="0" min="0" step="0.1" class="input-sm" />
+              </label>
+            </div>
+            <details class="advanced-settings" data-task-stage="extract">
+              <summary>高级抽帧设置</summary>
+              <div class="video-sprite-control-grid">
+                <label class="region-field">
+                  <span>单帧边长</span>
+                  <input type="number" id="video-sprite-frame-edge" value="256" min="64" max="768" step="16" class="input-sm" />
+                </label>
+                <label class="region-field">
+                  <span>裁切留白</span>
+                  <input type="number" id="video-sprite-padding" value="12" min="0" max="96" class="input-sm" />
+                </label>
+                <label class="region-field">
+                  <span>预览 FPS</span>
+                  <input type="number" id="video-sprite-source-preview-fps" value="6" min="1" max="30" class="input-sm" />
+                </label>
+                <label class="region-field">
+                  <span>预览上限</span>
+                  <input type="number" id="video-sprite-source-preview-max" value="72" min="2" max="240" class="input-sm" />
+                </label>
+              </div>
+            </details>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="range">
+            <div class="panel-heading">
+              <span>画面区域</span>
+              <button id="btn-video-sprite-crop-full" class="btn-sm" type="button">整帧</button>
+            </div>
+            <details class="advanced-settings">
+              <summary>精确裁切坐标</summary>
+              <div class="region-grid video-sprite-crop-grid">
+                <label class="region-field"><span>X</span><input type="number" id="video-sprite-crop-x" value="0" min="0" class="input-sm" /></label>
+                <label class="region-field"><span>Y</span><input type="number" id="video-sprite-crop-y" value="0" min="0" class="input-sm" /></label>
+                <label class="region-field"><span>W</span><input type="number" id="video-sprite-crop-w" value="0" min="1" class="input-sm" /></label>
+                <label class="region-field"><span>H</span><input type="number" id="video-sprite-crop-h" value="0" min="1" class="input-sm" /></label>
+              </div>
+            </details>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="extract">
+            <div class="panel-heading">
+              <span>人物提取</span>
+            </div>
+            <div class="form-group">
+              <label for="video-sprite-bg-mode">背景模式</label>
+              <select id="video-sprite-bg-mode">
+                <option value="edge">边缘背景</option>
+                <option value="firstFrame">首帧背景</option>
+                <option value="none">不抠背景</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="video-sprite-threshold">背景阈值</label>
+              <input type="range" id="video-sprite-threshold" min="1" max="160" value="36" />
+              <span class="range-value" id="video-sprite-threshold-label">36</span>
+            </div>
+            <label class="auto-trim-toggle">
+              <input type="checkbox" id="video-sprite-auto-trim" checked />
+              自动裁切人物边界
+            </label>
+            <label class="auto-trim-toggle">
+              <input type="checkbox" id="video-sprite-transparent" checked />
+              背景输出透明
+            </label>
+          </section>
+
+          <section class="sprite-panel video-redraw-panel" data-task-stage="redraw">
+            <div class="panel-heading">
+              <span>AI 分组重绘</span>
+              <span id="video-redraw-api-profile" class="video-redraw-profile">API: -</span>
+            </div>
+            <div class="video-redraw-grid">
+              <label class="region-field">
+                <span>最终列数</span>
+                <input type="number" id="video-redraw-final-cols" value="4" min="1" max="20" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>分组行数</span>
+                <input type="number" id="video-redraw-group-rows" value="2" min="1" max="4" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>分组列数</span>
+                <input type="number" id="video-redraw-group-cols" value="2" min="1" max="4" class="input-sm" />
+              </label>
+              <label class="region-field">
+                <span>分辨率</span>
+                <select id="video-redraw-resolution">
+                  <option value="原始">原始 / 1K</option>
+                  <option value="1K" selected>1K</option>
+                  <option value="2K">2K</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="video-redraw-style">风格</label>
+              <select id="video-redraw-style">
+                <option value="none">无</option>
+                <option value="realistic">写实摄影</option>
+                <option value="anime" selected>动漫卡通</option>
+                <option value="oil-painting">油画艺术</option>
+                <option value="3d-render">3D渲染</option>
+                <option value="pixel-art">像素艺术</option>
+                <option value="cyberpunk">赛博朋克</option>
+                <option value="watercolor">水彩画</option>
+                <option value="sketch">素描速写</option>
+                <option value="flat-illustration">扁平插画</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="video-redraw-prompt">重绘提示词</label>
+              <textarea id="video-redraw-prompt" rows="3" placeholder="例如：把参考动作重绘为同一个像素角色奔跑动画"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="video-redraw-negative-prompt">负面提示词</label>
+              <input type="text" id="video-redraw-negative-prompt" placeholder="可选：身份漂移、动作错序、跨格、重叠" />
+            </div>
+            <div class="generation-constraint-box">
+              <label class="auto-trim-toggle" for="redraw-constraints-enabled">
+                <input id="redraw-constraints-enabled" type="checkbox" checked />
+                角色与背景约束
+              </label>
+              <div class="video-generation-grid">
+                <label class="region-field">
+                  <span>背景</span>
+                  <select id="redraw-constraints-background">
+                    <option value="preserve" selected>保持输入</option>
+                    <option value="solid">纯色</option>
+                    <option value="transparent">透明</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </label>
+                <label class="region-field">
+                  <span>角色构图</span>
+                  <select id="redraw-constraints-framing">
+                    <option value="preserve">保持输入</option>
+                    <option value="full_body" selected>完整角色</option>
+                    <option value="upper_body">半身</option>
+                  </select>
+                </label>
+              </div>
+              <input id="redraw-constraints-background-description" type="text" placeholder="背景说明，例如：纯绿色 #00ff00" disabled />
+            </div>
+            <div id="video-redraw-summary" class="video-redraw-summary" aria-live="polite">抽帧后可按小网格顺序重绘；后续批次自动参考上一批生成末帧。</div>
+            <div class="video-redraw-actions">
+              <button id="btn-video-redraw-pause" class="btn-secondary" type="button" disabled>暂停</button>
+              <button id="btn-video-redraw-discard" class="btn-sm btn-danger-soft" type="button" disabled>删除运行</button>
+            </div>
+            <div id="video-redraw-batches" class="video-redraw-batches">
+              <div class="placeholder-text">尚未创建重绘运行</div>
+            </div>
+          </section>
+
+          <section class="sprite-panel" data-task-stage="preview">
+            <div class="video-sprite-actions">
+              <button id="btn-video-sprite-reference" class="btn-secondary" type="button" disabled>设为参考图</button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="video-sprite-main">
+          <div class="preview-meta-bar" data-task-stage="source range extract redraw preview">
+            <span class="frame-info" id="video-sprite-status">就绪</span>
+            <div class="video-sprite-view-tabs">
+              <button id="btn-video-sprite-view-source" class="btn-sm active" type="button">源区域</button>
+              <button id="btn-video-sprite-view-sheet" class="btn-sm" type="button" disabled>序列帧图</button>
+              <button id="btn-video-sprite-view-playback" class="btn-sm" type="button" disabled>播放预览</button>
+            </div>
+            <span class="frame-info" id="video-sprite-size">尺寸: -</span>
+          </div>
+          <div class="preview-area video-sprite-preview" data-task-stage="source range extract redraw preview">
+            <video id="video-sprite-video" playsinline preload="metadata" muted></video>
+            <canvas id="video-sprite-canvas"></canvas>
+            <div class="preview-placeholder" id="video-sprite-placeholder">序列帧图片预览</div>
+            <div class="video-sprite-busy" id="video-sprite-busy" hidden>
+              <span class="video-sprite-spinner"></span>
+              <span id="video-sprite-busy-text">正在生成...</span>
+            </div>
+          </div>
+          <div class="video-source-timeline" data-task-stage="range">
+            <div class="video-time-row">
+              <span id="video-sprite-current-time">当前: 0.00s</span>
+              <div class="video-time-actions">
+                <button id="btn-video-sprite-set-start" class="btn-sm" type="button" disabled>设为开始</button>
+                <button id="btn-video-sprite-set-end" class="btn-sm" type="button" disabled>设为结束</button>
+              </div>
+            </div>
+            <input type="range" id="video-sprite-time-scrub" min="0" max="0" step="0.01" value="0" disabled />
+            <div class="video-range-row">
+              <label>
+                <span>开始</span>
+                <input type="range" id="video-sprite-start-range" min="0" max="0" step="0.01" value="0" disabled />
+              </label>
+              <label>
+                <span>结束</span>
+                <input type="range" id="video-sprite-end-range" min="0" max="0" step="0.01" value="0" disabled />
+              </label>
+            </div>
+          </div>
+          <div class="playback-controls video-sprite-playback-controls" data-task-stage="source extract redraw preview">
+            <button id="btn-video-sprite-prev" class="btn-sm" type="button" disabled>上一帧</button>
+            <button id="btn-video-sprite-play" class="btn-primary" type="button" disabled>播放</button>
+            <button id="btn-video-sprite-next" class="btn-sm" type="button" disabled>下一帧</button>
+            <div class="control-group">
+              <label for="video-sprite-fps">播放 FPS</label>
+              <input type="range" id="video-sprite-fps" min="1" max="60" value="12" />
+              <span id="video-sprite-fps-label">12</span>
+            </div>
+            <span class="frame-info" id="video-sprite-playback-info">帧: 0/0</span>
+          </div>
+        </section>
+
+        <aside class="video-sprite-sidebar" data-task-stage="extract redraw preview">
+          <div class="frames-header">
+            <span>抽取帧</span>
+            <span id="video-sprite-frame-total">0 帧</span>
+          </div>
+          <div class="video-frame-list" id="video-sprite-frame-list">
+            <div class="placeholder-text">选择视频后生成序列帧图</div>
+          </div>
+        </aside>
+      </div>
+    </section>

@@ -17,14 +17,6 @@ export function setButtonState(
   }
 }
 
-export function setPanelVisible(
-  element: HTMLElement,
-  visible: boolean,
-  display: string = ""
-): void {
-  element.style.display = visible ? display : "none";
-}
-
 export function setBusyState(
   container: HTMLElement,
   textElement: HTMLElement,

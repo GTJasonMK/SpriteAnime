@@ -7,7 +7,11 @@ export async function mapWithConcurrency<T, R>(
   concurrency: number,
   mapper: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
-  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  if (items.length === 0) return [];
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(`并发数必须是正整数，实际为 ${concurrency}`);
+  }
+  const limit = Math.min(concurrency, items.length);
   const results = new Array<R>(items.length);
   let nextIndex = 0;
 

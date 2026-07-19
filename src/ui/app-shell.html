@@ -1,0 +1,81 @@
+<header class="app-header">
+  <div class="app-header-identity">
+    <span class="app-mark" aria-hidden="true">S</span>
+    <div>
+      <strong>SpriteAnime</strong>
+      <span id="workspace-task-title">新建动画任务</span>
+    </div>
+  </div>
+  <div class="app-header-status">
+    <span id="workspace-save-status" aria-live="polite">尚未创建任务</span>
+  </div>
+  <div class="app-header-actions">
+    <button id="btn-new-task" class="btn-sm" type="button" hidden>新建任务</button>
+    <label class="toolbar-profile-switch top-profile-switch" for="active-api-profile">
+      <span>API</span>
+      <select id="active-api-profile" aria-label="切换 API 配置"></select>
+    </label>
+    <button id="btn-settings" class="btn-settings" title="设置" aria-label="设置" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.96 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.95a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.02V3h4v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06L19.8 7l-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.96 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="task-start" class="task-start">
+  <div class="task-start-copy">
+    <span class="task-start-kicker">统一动画工作台</span>
+    <h1>你想从哪里开始？</h1>
+    <p>选择一种素材来源，工作台会只显示当前步骤需要的工具。</p>
+  </div>
+  <div class="task-start-grid">
+    <button class="task-card" type="button" data-start-task="image">
+      <span class="task-card-icon">图</span>
+      <strong>生成或导入图片</strong>
+      <span>提示词、参考图、抠图、网格切分和动画导出</span>
+    </button>
+    <button class="task-card" type="button" data-start-task="video">
+      <span class="task-card-icon">视</span>
+      <strong>从视频制作</strong>
+      <span>本地或 AI 视频、选段裁切、抽帧和分组重绘</span>
+    </button>
+    <button class="task-card" type="button" data-start-task="sprite">
+      <span class="task-card-icon">帧</span>
+      <strong>导入序列帧图</strong>
+      <span>调整网格与边界，播放检查并导出帧或 GIF</span>
+    </button>
+  </div>
+</main>
+
+<main id="unified-workspace" class="unified-workspace" hidden>
+  <aside class="workspace-step-rail" aria-label="任务阶段">
+    <div id="workspace-step-list" class="workspace-step-list"></div>
+  </aside>
+  <section id="workspace-surface-host" class="workspace-surface-host"></section>
+  <footer class="workspace-action-bar">
+    <div class="workspace-action-context">
+      <strong id="workspace-stage-title" tabindex="-1">当前步骤</strong>
+      <span id="workspace-stage-hint">完成当前步骤后继续</span>
+    </div>
+    <div class="workspace-action-buttons">
+      <button id="workspace-secondary-action" class="btn-secondary" type="button" hidden></button>
+      <button id="workspace-primary-action" class="btn-primary" type="button">继续</button>
+    </div>
+  </footer>
+</main>
+
+<div id="workspace-recovery-modal" class="modal-overlay workspace-recovery-modal" hidden>
+  <div class="modal-content workspace-recovery-content" role="alertdialog" aria-modal="true" aria-labelledby="workspace-recovery-title">
+    <div class="modal-header">
+      <h2 id="workspace-recovery-title">旧工作区无法恢复</h2>
+    </div>
+    <div class="modal-body">
+      <p id="workspace-recovery-message"></p>
+      <p class="config-check-status">新版工作台使用严格的 schema v3，不会转换或覆盖旧工作区。重置只清理未完成工作和临时文件，已保存资产与导出结果会保留。</p>
+    </div>
+    <div class="modal-footer workspace-recovery-actions">
+      <button id="btn-reveal-workspace" class="btn-secondary" type="button">打开工作区目录</button>
+      <button id="btn-exit-workspace-recovery" class="btn-secondary" type="button">退出应用</button>
+      <button id="btn-reset-workspace" class="btn-primary" type="button">重置工作区</button>
+    </div>
+  </div>
+</div>

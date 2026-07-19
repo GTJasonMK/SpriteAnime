@@ -1,0 +1,406 @@
+/* === 精灵图工作台 === */
+.sprite-layout {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 300px minmax(500px, 1fr) 250px;
+}
+
+.sprite-inspector {
+  border-right: 1px solid var(--border-default);
+  overflow-y: auto;
+}
+
+.sprite-sidebar {
+  border-left: 1px solid var(--border-default);
+}
+
+.sprite-panel {
+  border: 1px solid var(--border-card);
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.panel-heading,
+.frames-header,
+.preview-meta-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.panel-heading {
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.sprite-inspector .sprite-panel > .panel-heading,
+.video-sprite-inspector .sprite-panel > .panel-heading {
+  min-height: 36px; margin: -10px -10px 10px; padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--border-card); background: rgba(255, 255, 255, 0.025);
+  color: var(--text-secondary); font-size: 12px; font-weight: 650;
+}
+.source-row {
+  display: flex;
+  gap: 8px;
+}
+.source-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-row .btn-secondary {
+  min-width: 84px;
+  justify-content: center;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
+.split-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.split-actions button,
+.frames-header .btn-primary {
+  justify-content: center;
+}
+
+.grid-size-row,
+.region-grid,
+.boundary-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.grid-size-row {
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 10px;
+}
+
+.grid-size-row input.input-sm {
+  width: 100%;
+}
+
+.grid-preset-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.grid-preset-row .btn-sm {
+  justify-content: center;
+  padding-inline: 6px;
+}
+
+.region-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.boundary-grid {
+  grid-template-columns: 1fr;
+}
+
+.boundary-heading-options {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.boundary-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.boundary-actions .btn-sm {
+  justify-content: center;
+  padding-inline: 6px;
+}
+
+.region-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.region-field input.input-sm,
+.region-field .input-compact {
+  width: 100%;
+}
+
+.region-field .btn-sm {
+  width: 100%;
+  justify-content: center;
+}
+
+.auto-trim-toggle {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.auto-expand-toggle {
+  display: none;
+}
+
+.sprite-auto-advanced {
+  display: none;
+}
+
+.sprite-main {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.sprite-main > .preview-meta-bar,
+.video-sprite-main > .preview-meta-bar {
+  padding: 5px 7px; border: 1px solid var(--border-card);
+  border-radius: 10px; background: var(--bg-card);
+}
+
+.preview-area {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.10) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.10) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.10) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.10) 75%);
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  border: 1px solid var(--border-card);
+  overflow: hidden;
+  backdrop-filter: var(--glass-blur-light);
+  -webkit-backdrop-filter: var(--glass-blur-light);
+}
+
+.preview-area.has-image {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.preview-area canvas {
+  image-rendering: pixelated;
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+}
+
+.preview-placeholder {
+  position: absolute; display: flex; flex-direction: column;
+  align-items: center; gap: 9px;
+  color: var(--text-placeholder); font-size: 13px;
+  pointer-events: none;
+}
+
+.preview-placeholder::before {
+  content: "▦"; width: 42px; height: 42px; display: grid; place-items: center;
+  border: 1px solid var(--border-card); border-radius: 12px;
+  color: var(--text-secondary); background: var(--bg-card-strong); font-size: 18px;
+}
+
+.preview-area.has-image .preview-placeholder {
+  display: none;
+}
+
+.preview-area.uses-video .preview-placeholder {
+  display: none;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border-card);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.control-group label {
+  font-weight: 600;
+  min-width: 30px;
+}
+
+.frame-info {
+  font-size: 12px;
+  border: 1px solid var(--border-card);
+  font-family: var(--font-mono);
+}
+
+.frames-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-default);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.frames-header .btn-primary {
+  min-width: 72px;
+  padding: 7px 12px;
+}
+
+.sprite-sidebar.pre-split .frames-header,
+.sprite-sidebar.pre-split .sidebar-toolbar,
+.sprite-sidebar.pre-split .thumbnail-list {
+  display: none;
+}
+
+.sprite-sidebar.has-frames .boundary-sidebar-panel {
+  display: none;
+}
+
+.sidebar-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-card);
+  flex-shrink: 0;
+}
+
+.sidebar-toolbar .btn-sm {
+  justify-content: center;
+  padding-inline: 6px;
+}
+
+.placeholder-text {
+  grid-column: 1 / -1;
+  align-self: center;
+  text-align: center;
+  color: var(--text-placeholder);
+  padding: 32px 8px;
+  font-size: 13px;
+}
+
+.frame-thumb {
+  width: 100%;
+  height: 68px;
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s, transform 0.1s, box-shadow 0.15s;
+}
+
+.frame-thumb:hover {
+  border-color: var(--primary-border);
+  transform: translateY(-1px);
+}
+
+.frame-thumb.selected {
+  border-color: var(--primary);
+}
+
+.frame-thumb.current {
+  border-color: var(--primary-hover);
+}
+
+.frame-thumb.current::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 9px solid var(--primary-hover);
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.45));
+  pointer-events: none;
+}
+
+.frame-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.frame-thumb .frame-index {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-on-primary);
+  background: rgba(0,0,0,0.55);
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.2;
+}
+
+.frame-thumb.selected .frame-order {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 1.2;
+}
+
+/* === 滑块 === */
+input[type="range"] {
+  width: 100px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+/* === 滚动条 === */
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+/* === 复选框 === */
+input[type="checkbox"] {
+  cursor: pointer;
+}
